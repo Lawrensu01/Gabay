@@ -17,7 +17,6 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.gabay.application",
-      "icon": "./assets/images/icon.png",
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "This app needs access to location to show your position on the map.",
         "NSLocationAlwaysUsageDescription": "This app needs access to location to show your position on the map.",
@@ -27,10 +26,9 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/images/icon.png",
+        "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "icon": "./assets/images/icon.png",
       "package": "com.gabay.application",
       "permissions": [
         "android.permission.ACCESS_COARSE_LOCATION",
@@ -38,8 +36,7 @@
         "android.permission.CAMERA",
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.WRITE_EXTERNAL_STORAGE",
-        "android.permission.RECORD_AUDIO",
-        "android.permission.INTERNET"
+        "android.permission.RECORD_AUDIO"
       ]
     },
     "web": {
@@ -73,3 +70,4 @@
     "owner": "godskillz123"
   }
 }
+

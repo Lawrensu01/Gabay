@@ -24,6 +24,8 @@ import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/nativ
 import { useAuth } from '../../context/authContext';
 import { router } from 'expo-router';
 
+const API_KEY = "AlzaSyGxLm0CDW2YgwW_Tj5NtfKe-y1qa7Ga1xS";
+
 // Updated Jeepney Routes in Bacolod with accurate routes and landmarks
 const JEEPNEY_ROUTES = [
   {
@@ -298,146 +300,6 @@ const TRANSFER_POINTS = [
   }
 ];
 
-// Modify the checkLocationPermission function
-const checkLocationPermission = async () => {
-  try {
-    const { status: existingStatus } = await Location.getForegroundPermissionsAsync();
-    let finalStatus = existingStatus;
-    
-    if (existingStatus !== 'granted') {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      finalStatus = status;
-    }
-    
-    if (finalStatus !== 'granted') {
-      Alert.alert(
-        "Location Permission Required",
-        "Please enable location services to use navigation features.",
-        [
-          { 
-            text: "Open Settings", 
-            onPress: () => router.push('/permissions') 
-          },
-          { 
-            text: "Cancel", 
-            style: "cancel" 
-          }
-        ]
-      );
-      return false;
-    }
-    return true;
-  } catch (error) {
-    console.error("Error checking location permission:", error);
-    Alert.alert(
-      "Error",
-      "Failed to check location permission. Please try again.",
-      [
-        { 
-          text: "Open Settings", 
-          onPress: () => router.push('/permissions') 
-        },
-        { 
-          text: "Cancel", 
-          style: "cancel" 
-        }
-      ]
-    );
-    return false;
-  }
-};
-
-// Modify the checkLocationServices function
-const checkLocationServices = async () => {
-  try {
-    const enabled = await Location.hasServicesEnabledAsync();
-    if (!enabled) {
-      Alert.alert(
-        "Location Services Disabled",
-        "Please enable location services to use navigation features.",
-        [
-          { 
-            text: "Open Settings", 
-            onPress: () => router.push('/permissions') 
-          },
-          { 
-            text: "Cancel", 
-            style: "cancel" 
-          }
-        ]
-      );
-      return false;
-    }
-    return true;
-  } catch (error) {
-    console.error("Error checking location services:", error);
-    return false;
-  }
-};
-
-// Modify the initializeLocationServices function to accept parameters
-const initializeLocationServices = async (setLocation, selectedLocation, fetchDirections, locationWatchRef) => {
-  try {
-    const servicesEnabled = await checkLocationServices();
-    if (!servicesEnabled) return;
-
-    const hasPermission = await checkLocationPermission();
-    if (!hasPermission) return;
-
-    // Get initial location with high accuracy
-    const location = await Location.getCurrentPositionAsync({
-      accuracy: Location.Accuracy.High,
-      timeout: 15000,
-      mayShowUserSettingsDialog: true
-    });
-    
-    const newLocation = {
-      latitude: location.coords.latitude,
-      longitude: location.coords.longitude,
-    };
-    
-    setLocation(newLocation);
-
-    // Watch for location updates with appropriate settings for Android
-    locationWatchRef.current = await Location.watchPositionAsync(
-      {
-        accuracy: Location.Accuracy.High,
-        timeInterval: Platform.OS === 'android' ? 10000 : 5000,
-        distanceInterval: Platform.OS === 'android' ? 20 : 10,
-        mayShowUserSettingsDialog: true
-      },
-      (location) => {
-        const updatedLocation = {
-          latitude: location.coords.latitude,
-          longitude: location.coords.longitude,
-        };
-        setLocation(updatedLocation);
-
-        // Re-fetch directions if a destination is set
-        if (selectedLocation) {
-          fetchDirections(updatedLocation);
-        }
-      }
-    );
-  } catch (error) {
-    console.error("Error initializing location:", error);
-    Alert.alert(
-      "Error",
-      "Failed to initialize location services. Please check your location settings and try again.",
-      [
-        { 
-          text: "Open Settings", 
-          onPress: () => router.push('/permissions') 
-        },
-        { 
-          text: "Cancel", 
-          style: "cancel" 
-        }
-      ]
-    );
-  }
-};
-
 export default function Navigation() {
   const navigationRoute = useRoute();
   const navigation = useNavigation();
@@ -476,6 +338,63 @@ export default function Navigation() {
   const searchTimeoutRef = useRef(null);
   const abortControllerRef = useRef(null);
 
+  // Initialize and get user location
+  useEffect(() => {
+    const initializeLocation = async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== "granted") {
+          console.warn("Permission to access location was denied");
+          return;
+        }
+
+        // Get initial location
+        const location = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.High
+        });
+        
+        const newLocation = {
+          latitude: location.coords.latitude,
+          longitude: location.coords.longitude,
+        };
+        
+        setUserLocation(newLocation);
+
+        // Watch for location updates
+        locationWatchRef.current = await Location.watchPositionAsync(
+          {
+            accuracy: Location.Accuracy.High,
+            timeInterval: 5000,
+            distanceInterval: 10,
+          },
+          (location) => {
+            const updatedLocation = {
+              latitude: location.coords.latitude,
+              longitude: location.coords.longitude,
+            };
+            setUserLocation(updatedLocation);
+
+            // Re-fetch directions if a destination is set
+            if (selectedLocation) {
+              fetchDirections(updatedLocation);
+            }
+          }
+        );
+      } catch (error) {
+        console.error("Error initializing location:", error);
+      }
+    };
+
+    initializeLocation();
+
+    // Cleanup subscription on unmount
+    return () => {
+      if (locationWatchRef.current && locationWatchRef.current.remove) {
+        locationWatchRef.current.remove();
+      }
+    };
+  }, []);
+
   // Add this useEffect to handle navigation params
   useEffect(() => {
     const params = navigationRoute.params;
@@ -509,7 +428,7 @@ export default function Navigation() {
     }
   };
 
-  // Modify the fetchPlaces function to use OpenStreetMap Nominatim API
+  // Remove the debounce function and modify fetchPlaces
   const fetchPlaces = async (text) => {
     setQuery(text);
     if (text.length < 3) {
@@ -535,81 +454,59 @@ export default function Navigation() {
       setLoading(true);
       try {
         const response = await axios.get(
-          "https://nominatim.openstreetmap.org/search",
+          "https://maps.gomaps.pro/maps/api/place/autocomplete/json",
           {
             params: {
-              q: text,
-              format: "json",
-              limit: 5,
-              countrycodes: "ph",
-              viewbox: "122.9409,10.6665,122.9609,10.6865", // Bacolod area
-              bounded: 1
-            },
-            headers: {
-              'User-Agent': 'Gabay-Application'
+              input: text,
+              key: API_KEY,
+              components: "country:PH",
+              location: "10.6765,122.9509", // Bacolod coordinates
+              radius: 10000, // Limit to Bacolod area
+              strictbounds: true,
             },
             signal: abortControllerRef.current.signal
           }
         );
-        
-        if (response.data && response.data.length > 0) {
-          const formattedPlaces = response.data.map(place => ({
-            place_id: place.place_id,
-            description: place.display_name,
-            structured_formatting: {
-              main_text: place.display_name.split(',')[0],
-              secondary_text: place.display_name.split(',').slice(1).join(',').trim()
-            }
-          }));
-          setPlaces(formattedPlaces);
-        } else {
-          setPlaces([]);
-        }
+        setPlaces(response.data.predictions || []);
       } catch (error) {
         if (error.name === 'AbortError') {
+          // Request was aborted, do nothing
           return;
         }
         console.error("Error fetching places:", error);
         setPlaces([]);
-        Alert.alert(
-          "Error",
-          "Failed to fetch places. Please check your internet connection and try again.",
-          [{ text: "OK" }]
-        );
       } finally {
         setLoading(false);
       }
-    }, 500);
+    }, 500); // 500ms delay
   };
 
-  // Modify the fetchPlaceDetails function to use OpenStreetMap
+  // Modify the fetchPlaceDetails function to remove the automatic history save
   const fetchPlaceDetails = async (placeId) => {
     try {
       setLoading(true);
       const response = await axios.get(
-        `https://nominatim.openstreetmap.org/details`,
+        "https://maps.gomaps.pro/maps/api/place/details/json",
         {
           params: { 
-            place_id: placeId,
-            format: "json"
+            place_id: placeId, 
+            key: API_KEY,
+            fields: "geometry,name,vicinity"
           },
-          headers: {
-            'User-Agent': 'Gabay-Application'
-          }
         }
       );
       
-      if (response.data && response.data.geometry) {
-        const location = response.data.geometry;
+      if (response.data.result && response.data.result.geometry) {
+        const location = response.data.result.geometry.location;
         setSelectedLocation({
-          latitude: parseFloat(location.lat),
-          longitude: parseFloat(location.lon),
-          placeId: placeId,
+          latitude: location.lat,
+          longitude: location.lng,
+          placeId: placeId, // Store placeId with the location
         });
-        setToLocation(response.data.display_name);
+        setToLocation(response.data.result.name);
         
         setPlaces([]);
-        setQuery(response.data.display_name);
+        setQuery(response.data.result.name);
         resetRouteData();
 
         if (userLocation) {
@@ -795,7 +692,7 @@ export default function Navigation() {
     }
   };
 
-  // Modify the fetchDirections function to use OpenStreetMap Routing Machine
+  // Modify the fetchDirections function to get both routes
   const fetchDirections = async (origin) => {
     if (!origin || !selectedLocation) {
       console.warn("User location or destination not set");
@@ -817,49 +714,73 @@ export default function Navigation() {
         try {
           // Fetch fastest PWD route
           const fastResponse = await axios.get(
-            "https://router.project-osrm.org/route/v1/walking",
+            "https://maps.gomaps.pro/maps/api/directions/json",
             {
               params: {
-                start: `${directionsOrigin.longitude},${directionsOrigin.latitude}`,
-                end: `${selectedLocation.longitude},${selectedLocation.latitude}`,
+                origin: `${directionsOrigin.latitude},${directionsOrigin.longitude}`,
+                destination: `${selectedLocation.latitude},${selectedLocation.longitude}`,
+                key: API_KEY,
+                mode: "walking",
                 alternatives: true,
-                steps: true,
-                annotations: true
-              }
+                wheelchair: true,
+                optimize: "time"
+              },
             }
           );
 
-          // Fetch safest PWD route
+          // Fetch safest PWD route (prioritize accessibility)
           const safeResponse = await axios.get(
-            "https://router.project-osrm.org/route/v1/walking",
+            "https://maps.gomaps.pro/maps/api/directions/json",
             {
               params: {
-                start: `${directionsOrigin.longitude},${directionsOrigin.latitude}`,
-                end: `${selectedLocation.longitude},${selectedLocation.latitude}`,
+                origin: `${directionsOrigin.latitude},${directionsOrigin.longitude}`,
+                destination: `${selectedLocation.latitude},${selectedLocation.longitude}`,
+                key: API_KEY,
+                mode: "walking",
                 alternatives: true,
-                steps: true,
-                annotations: true
-              }
+                wheelchair: true,
+                optimize: "fewer_transfers",
+                transit_routing_preference: "less_walking"
+              },
             }
           );
 
-          if (fastResponse.data.routes && fastResponse.data.routes.length > 0) {
-            const fastRoute = fastResponse.data.routes[0];
-            const fastPoints = fastRoute.geometry.coordinates.map(coord => ({
-              latitude: coord[1],
-              longitude: coord[0]
-            }));
-            setPwdFastRoute(fastPoints);
+          if (fastResponse.data?.routes?.[0]) {
+            const fastPoints = fastResponse.data.routes[0].overview_polyline.points;
+            const fastRoute = decodePolyline(fastPoints);
+            setPwdFastRoute(fastRoute);
           }
 
-          if (safeResponse.data.routes && safeResponse.data.routes.length > 0) {
-            const safeRoute = safeResponse.data.routes[0];
-            const safePoints = safeRoute.geometry.coordinates.map(coord => ({
-              latitude: coord[1],
-              longitude: coord[0]
-            }));
-            setPwdSafeRoute(safePoints);
+          if (safeResponse.data?.routes?.[0]) {
+            const safePoints = safeResponse.data.routes[0].overview_polyline.points;
+            const safeRoute = decodePolyline(safePoints);
+            setPwdSafeRoute(safeRoute);
           }
+
+          // Set the main route to the safe route by default
+          if (safeResponse.data?.routes?.[0]) {
+            const points = safeResponse.data.routes[0].overview_polyline.points;
+            const decodedRoute = decodePolyline(points);
+            setRoutePath(decodedRoute);
+            fitMapToRoute(decodedRoute);
+          }
+
+          // Update ETA and traffic info for PWD route
+          if (safeResponse.data?.routes?.[0]?.legs?.[0]) {
+            const leg = safeResponse.data.routes[0].legs[0];
+            newEta["pwd"] = leg.duration.text;
+            setDistance(leg.distance.text);
+          }
+
+          if (response.data?.routes?.[0]?.legs?.[0]?.steps) {
+            const steps = response.data.routes[0].legs[0].steps.map(step => ({
+              instruction: step.html_instructions.replace(/<[^>]*>/g, ''),
+              distance: step.distance.text,
+              duration: step.duration.text
+            }));
+            setDirections(steps);
+          }
+
         } catch (error) {
           console.error("Error fetching PWD routes:", error);
         }
@@ -867,44 +788,48 @@ export default function Navigation() {
 
       // Regular route fetching for other modes
       for (const mode of modes) {
+        const apiMode = mode === "tricycle" || mode === "jeepney" ? "driving" : mode;
+        
         try {
           const response = await axios.get(
-            "https://router.project-osrm.org/route/v1/" + (mode === "jeepney" ? "driving" : mode),
+            "https://maps.gomaps.pro/maps/api/directions/json",
             {
               params: {
-                start: `${directionsOrigin.longitude},${directionsOrigin.latitude}`,
-                end: `${selectedLocation.longitude},${selectedLocation.latitude}`,
+                origin: `${directionsOrigin.latitude},${directionsOrigin.longitude}`,
+                destination: `${selectedLocation.latitude},${selectedLocation.longitude}`,
+                key: API_KEY,
+                mode: apiMode,
+                departure_time: "now",
                 alternatives: true,
-                steps: true,
-                annotations: true
-              }
+                // Add wheelchair accessibility parameter when PWD route is enabled
+                ...(usePwdRoute && {
+                  wheelchair: true,
+                  transit_routing_preference: "less_walking"
+                })
+              },
             }
           );
 
-          if (response.data.routes && response.data.routes.length > 0) {
-            const route = response.data.routes[0];
-            const leg = route.legs[0];
+          if (!response.data.routes || response.data.routes.length === 0) {
+            console.warn(`No available route found for ${mode}`);
+            continue;
+          }
 
-            newEta[mode] = formatDuration(leg.duration);
-            newTrafficDuration[mode] = "N/A"; // OSRM doesn't provide traffic data
-            setDistance(formatDistance(leg.distance));
+          const route = response.data.routes[0];
+          const leg = route.legs[0];
 
-            if (mode === travelMode) {
-              const points = route.geometry.coordinates.map(coord => ({
-                latitude: coord[1],
-                longitude: coord[0]
-              }));
-              setRoutePath(points);
-              fitMapToRoute(points);
-            }
+          newEta[mode] = leg.duration.text;
+          newTrafficDuration[mode] = leg.duration_in_traffic?.text || "N/A";
+          setDistance(leg.distance.text);
+
+          if (mode === travelMode) {
+            const points = route.overview_polyline.points;
+            const decodedRoute = decodePolyline(points);
+            setRoutePath(decodedRoute);
+            fitMapToRoute(decodedRoute);
           }
         } catch (error) {
           console.error(`Error fetching ${mode} directions:`, error);
-          Alert.alert(
-            "Error",
-            `Failed to fetch ${mode} directions. Please try again.`,
-            [{ text: "OK" }]
-          );
         }
       }
 
@@ -913,33 +838,9 @@ export default function Navigation() {
 
     } catch (error) {
       console.error("Error in fetchDirections:", error);
-      Alert.alert(
-        "Error",
-        "Failed to fetch directions. Please check your internet connection and try again.",
-        [{ text: "OK" }]
-      );
     } finally {
       setFetchingRoute(false);
     }
-  };
-
-  // Helper function to format duration
-  const formatDuration = (seconds) => {
-    const hours = Math.floor(seconds / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    if (hours > 0) {
-      return `${hours}h ${minutes}m`;
-    }
-    return `${minutes}m`;
-  };
-
-  // Helper function to format distance
-  const formatDistance = (meters) => {
-    const kilometers = meters / 1000;
-    if (kilometers >= 1) {
-      return `${kilometers.toFixed(1)} km`;
-    }
-    return `${meters.toFixed(0)} m`;
   };
 
   // Check if user is on a road and set walk-to-route point if needed
@@ -948,63 +849,56 @@ export default function Navigation() {
     try {
       // First approach: Try using reverse geocoding to determine if user is on a road
       const reverseGeoResponse = await axios.get(
-        "https://nominatim.openstreetmap.org/reverse",
+        "https://maps.gomaps.pro/maps/api/geocode/json",
         {
           params: {
-            format: "json",
-            lat: origin.latitude,
-            lon: origin.longitude,
-            zoom: 18,
-            addressdetails: 1
+            latlng: `${origin.latitude},${origin.longitude}`,
+            key: API_KEY,
+            result_type: "route" // Try to get road information
           },
-          headers: {
-            'User-Agent': 'Gabay-Application'
-          }
         }
       );
       
       // Check if we got results indicating a road
-      const results = reverseGeoResponse.data?.address || [];
+      const results = reverseGeoResponse.data?.results || [];
       const isOnRoad = results.some(result => {
         // Check if any of the address components indicate a road
-        return result.road || result.pedestrian || result.footway || result.path;
+        return result.address_components?.some(component => 
+          component.types.includes("route") || 
+          component.types.includes("street_address")
+        );
       });
       
       if (!isOnRoad) {
         // If not on road, find the nearest road using Roads API
         const nearestRoadResponse = await axios.get(
-          "https://nominatim.openstreetmap.org/reverse",
+          "https://maps.gomaps.pro/maps/api/snapToRoads/json",
           {
             params: {
-              format: "json",
-              lat: origin.latitude,
-              lon: origin.longitude,
-              zoom: 18,
-              addressdetails: 1
+              path: `${origin.latitude},${origin.longitude}`,
+              key: API_KEY,
             },
-            headers: {
-              'User-Agent': 'Gabay-Application'
-            }
           }
         );
         
-        if (nearestRoadResponse.data?.address) {
-          const snappedPoint = {
-            latitude: parseFloat(nearestRoadResponse.data.lat),
-            longitude: parseFloat(nearestRoadResponse.data.lon)
+        if (nearestRoadResponse.data?.snappedPoints?.length > 0) {
+          const snappedPoint = nearestRoadResponse.data.snappedPoints[0].location;
+          const roadPoint = {
+            latitude: snappedPoint.latitude || snappedPoint.lat,
+            longitude: snappedPoint.longitude || snappedPoint.lng
           };
           
           // Calculate distance to nearest road
           const distanceToRoad = calculateDistance(
             origin.latitude,
             origin.longitude,
-            snappedPoint.latitude,
-            snappedPoint.longitude
+            roadPoint.latitude,
+            roadPoint.longitude
           );
           
           // If user is more than 25 meters from a road, show walk path
           if (distanceToRoad > 0.025) { // 25 meters threshold
-            setWalkToRoutePoint(snappedPoint);
+            setWalkToRoutePoint(roadPoint);
             return false; // Not on road
           }
         }
@@ -1020,23 +914,18 @@ export default function Navigation() {
       // Fallback method: Try directions API to see if first step is a long walk
       try {
         const walkCheckResponse = await axios.get(
-          "https://nominatim.openstreetmap.org/directions",
+          "https://maps.gomaps.pro/maps/api/directions/json",
           {
             params: {
-              format: "json",
-              json: true,
-              start: `${origin.latitude},${origin.longitude}`,
-              end: `${selectedLocation ? selectedLocation.latitude : origin.latitude + 0.01},${selectedLocation ? selectedLocation.longitude : origin.longitude + 0.01}`,
-              alternatives: 1,
-              steps: true
+              origin: `${origin.latitude},${origin.longitude}`,
+              destination: `${selectedLocation ? selectedLocation.latitude : origin.latitude + 0.01},${selectedLocation ? selectedLocation.longitude : origin.longitude + 0.01}`,
+              key: API_KEY,
+              mode: "walking",
             },
-            headers: {
-              'User-Agent': 'Gabay-Application'
-            }
           }
         );
         
-        if (walkCheckResponse.data.routes && walkCheckResponse.data.routes.length > 0) {
+        if (walkCheckResponse.data?.routes?.[0]?.legs?.[0]?.steps?.length > 0) {
           const firstStep = walkCheckResponse.data.routes[0].legs[0].steps[0];
           
           // If first step is more than 30 meters, user might be off-road
@@ -1044,7 +933,7 @@ export default function Navigation() {
             const walkToPoint = firstStep.end_location;
             setWalkToRoutePoint({
               latitude: walkToPoint.lat,
-              longitude: walkToPoint.lon
+              longitude: walkToPoint.lng,
             });
             return false; // Not on road
           }
@@ -1059,6 +948,33 @@ export default function Navigation() {
         setWalkToRoutePoint(null);
         return true; // Default to assuming on road in case of errors
       }
+    }
+  };
+
+  // Fetch PWD-friendly route
+  const fetchPwdFriendlyRoute = async (origin) => {
+    try {
+      const response = await axios.get(
+        "https://maps.gomaps.pro/maps/api/directions/json",
+        {
+          params: {
+            origin: `${origin.latitude},${origin.longitude}`,
+            destination: `${selectedLocation.latitude},${selectedLocation.longitude}`,
+            key: API_KEY,
+            mode: "walking",
+            alternatives: true,
+            // PWD-friendly parameters, if supported by API
+            avoid: "stairs",
+          },
+        }
+      );
+
+      if (response.data?.routes?.[0]?.overview_polyline) {
+        const pwdPoints = response.data.routes[0].overview_polyline.points;
+        setPwdRoute(decodePolyline(pwdPoints));
+      }
+    } catch (error) {
+      console.error("Error fetching PWD-friendly route:", error);
     }
   };
 
@@ -1129,6 +1045,40 @@ export default function Navigation() {
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     const distance = R * c; // Distance in km
     return distance;
+  };
+
+  // Decode Google Maps polyline algorithm
+  const decodePolyline = (encoded) => {
+    let points = [];
+    let index = 0,
+      lat = 0,
+      lng = 0;
+
+    while (index < encoded.length) {
+      let b,
+        shift = 0,
+        result = 0;
+      do {
+        b = encoded.charCodeAt(index++) - 63;
+        result |= (b & 0x1f) << shift;
+        shift += 5;
+      } while (b >= 0x20);
+      let dlat = result & 1 ? ~(result >> 1) : result >> 1;
+      lat += dlat;
+
+      shift = 0;
+      result = 0;
+      do {
+        b = encoded.charCodeAt(index++) - 63;
+        result |= (b & 0x1f) << shift;
+        shift += 5;
+      } while (b >= 0x20);
+      let dlng = result & 1 ? ~(result >> 1) : result >> 1;
+      lng += dlng;
+
+      points.push({ latitude: lat / 1e5, longitude: lng / 1e5 });
+    }
+    return points;
   };
 
   // Toggle PWD-friendly route display
@@ -1344,18 +1294,7 @@ export default function Navigation() {
     return [];
   };
 
-  // Add this useEffect inside the component
-  useEffect(() => {
-    // Call initializeLocationServices with the required parameters
-    initializeLocationServices(setUserLocation, selectedLocation, fetchDirections, locationWatchRef);
-    
-    // Cleanup subscription on unmount
-    return () => {
-      if (locationWatchRef.current && locationWatchRef.current.remove) {
-        locationWatchRef.current.remove();
-      }
-    };
-  }, [selectedLocation]); // Add selectedLocation as a dependency
+
 
   return (
     <SafeAreaView style={styles.container}>
@@ -1368,21 +1307,6 @@ export default function Navigation() {
           longitude: userLocation?.longitude || 122.9509,
           latitudeDelta: 0.05,
           longitudeDelta: 0.05,
-        }}
-        showsUserLocation={true}
-        showsMyLocationButton={true}
-        showsCompass={true}
-        showsScale={true}
-        showsBuildings={true}
-        showsTraffic={false}
-        showsIndoors={true}
-        toolbarEnabled={true}
-        mapType="standard"
-        onMapReady={() => {
-          console.log('Map is ready');
-        }}
-        onError={(error) => {
-          console.error('Map error:', error);
         }}
       >
         {/* User location marker */}
