@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const API_KEY = 'AlzaSytyjooqu9_vxaqo-Azx8GTJ7ezSgjBqfvJ'; // Replace with your actual API key
+const API_KEY = 'AlzaSyuXryjNYbGxgqXXsY8cgTEnntUZn7XnnLA'; // Replace with your actual API key
 
 // Base URL for Google Places API
 const API_BASE_URL = 'https://maps.gomaps.pro/maps/api/place';
