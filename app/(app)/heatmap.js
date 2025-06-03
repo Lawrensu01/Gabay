@@ -492,20 +492,25 @@ const AccessibilityMap = () => {
   const handleMarkerPress = async (feedback) => {
     try {
       console.log("🎯 Marker pressed, feedback data:", JSON.stringify(feedback, null, 2))
-      console.log("Images in feedback:", feedback.images)
-      
+      console.log("Checking for images in feedback:", feedback.images)
+
       // Find all feedbacks within the aggregation radius
       const nearbyFeedbacks = feedbacks.filter((f) => {
         const distance = calculateDistance(feedback.coordinate, f.coordinate)
-        return distance <= AREA_AGGREGATION_RADIUS
+        const isNearby = distance <= AREA_AGGREGATION_RADIUS
+        if (isNearby) {
+          console.log("Found nearby feedback:", {
+            id: f.id,
+            distance,
+            hasImages: !!f.images,
+            imageCount: f.images?.length || 0
+          })
+        }
+        return isNearby
       })
 
       console.log(`📊 Found ${nearbyFeedbacks.length} feedbacks in area`)
-      console.log("Nearby feedbacks data:", JSON.stringify(nearbyFeedbacks.map(f => ({
-        id: f.id,
-        images: f.images,
-        type: f.type
-      })), null, 2))
+      console.log("Nearby feedbacks with images:", nearbyFeedbacks.filter(f => f.images && f.images.length > 0).length)
 
       // Get location name for the area
       let locationName = "Loading location..."
@@ -523,20 +528,19 @@ const AccessibilityMap = () => {
         radius: AREA_AGGREGATION_RADIUS,
       }
 
+      console.log("Opening modal with data:", {
+        locationName,
+        feedbackCount: nearbyFeedbacks.length,
+        feedbacksWithImages: nearbyFeedbacks.filter(f => f.images && f.images.length > 0).length,
+        totalImages: nearbyFeedbacks.reduce((sum, f) => sum + (f.images?.length || 0), 0)
+      })
+
       // Set state and show modal
       setSelectedAreaLocation(locationName)
       setSelectedAreaData(areaData)
       setAreaSummaryVisible(true)
-      
-      console.log("Modal state:", {
-        areaSummaryVisible: true,
-        hasData: !!areaData,
-        feedbackCount: nearbyFeedbacks.length,
-        locationName,
-        feedbacksWithImages: nearbyFeedbacks.filter(f => f.images && f.images.length > 0).length
-      })
     } catch (error) {
-      console.error("Error aggregating area data:", error)
+      console.error("Error in handleMarkerPress:", error)
       Alert.alert("Error", "Failed to load area data")
     }
   }
@@ -983,7 +987,7 @@ const AccessibilityMap = () => {
     radius: INDOOR_RADIUS,
   })
 
-  // Get location name for display
+  // Update getLocationName function to extract main place name
   const getLocationName = async (latitude, longitude) => {
     try {
       const response = await fetch(
@@ -993,7 +997,7 @@ const AccessibilityMap = () => {
             "Accept-Language": "en",
             "User-Agent": "Gabay-App",
           },
-        },
+        }
       )
 
       if (!response.ok) {
@@ -1003,8 +1007,27 @@ const AccessibilityMap = () => {
       const text = await response.text()
       try {
         const data = JSON.parse(text)
-        if (data && data.display_name) {
-          return data.display_name
+        if (data) {
+          // Try to get the most relevant name from the address data
+          const mainName = 
+            data.address?.amenity || // Try amenity first (for malls, schools, etc.)
+            data.address?.building || // Then building name
+            data.address?.mall || // Specific for malls
+            data.address?.shop || // For shops
+            data.address?.office || // For offices
+            data.address?.university || // For universities
+            data.address?.college || // For colleges
+            data.address?.school || // For schools
+            data.address?.hospital || // For hospitals
+            data.address?.road || // Fall back to road name if no specific place
+            data.name || // Use name if available
+            "Unknown Location"
+
+          // Clean up the name
+          return mainName
+            .replace(/^The\s+/i, '') // Remove leading "The"
+            .split(',')[0] // Take only the part before any comma
+            .trim()
         }
         return "Unknown Location"
       } catch (parseError) {
