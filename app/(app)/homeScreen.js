@@ -1,26 +1,95 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Image, Modal, Linking, ActivityIndicator } from 'react-native';
+import { 
+  View, 
+  Text, 
+  ScrollView, 
+  TouchableOpacity, 
+  StyleSheet, 
+  Image, 
+  Modal, 
+  ActivityIndicator, 
+  Dimensions,
+  Platform 
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { searchPlacesByCategory, getPlaceDetails, getPlacePhotoUrl } from '../services/googlePlacesApi';
+import { collection, query, where, getDocs, doc, getDoc } from 'firebase/firestore';
+import { db } from '../../firebaseConfig';
+
+const { width, height } = Dimensions.get('window');
+
+// Add helper function to calculate distance between coordinates
+const calculateDistance = (coord1, coord2) => {
+  const R = 6371e3; // Earth's radius in meters
+  const φ1 = (coord1.latitude * Math.PI) / 180;
+  const φ2 = (coord2.latitude * Math.PI) / 180;
+  const Δφ = ((coord2.latitude - coord1.latitude) * Math.PI) / 180;
+  const Δλ = ((coord2.longitude - coord1.longitude) * Math.PI) / 180;
+
+  const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+    Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  const distance = R * c; // in meters
+
+  return distance;
+};
 
 // Categories for the tabs
 const categories = [
   { id: 'coffee', name: 'Coffee Shops' },
   { id: 'restaurants', name: 'Restaurants' },
   { id: 'malls', name: 'Shopping Malls' },
+  { id: 'schools', name: 'Schools' },
+  { id: 'hospitals', name: 'Hospitals' },
 ];
+
+// Add these helper functions after the categories definition
+const getFeatureIcon = (feature) => {
+  switch (feature) {
+    case 'wheelchairRamps':
+      return 'accessibility-outline';
+    case 'elevators':
+      return 'arrow-up-outline';
+    case 'widePathways':
+      return 'resize-outline';
+    case 'pwdRestrooms':
+      return 'water-outline';
+    default:
+      return 'checkmark-circle-outline';
+  }
+};
+
+const getFeatureLabel = (feature) => {
+  switch (feature) {
+    case 'wheelchairRamps':
+      return 'Wheelchair Ramps';
+    case 'elevators':
+      return 'Elevators';
+    case 'widePathways':
+      return 'Wide Pathways';
+    case 'pwdRestrooms':
+      return 'PWD Restrooms';
+    default:
+      return feature.replace(/([A-Z])/g, ' $1').trim(); // Convert camelCase to spaces
+  }
+};
 
 const PlacesTab = () => {
   const [activeCategory, setActiveCategory] = useState('coffee');
   const [selectedPlace, setSelectedPlace] = useState(null);
   const [showDetails, setShowDetails] = useState(false);
+  const [accessibilityFeedback, setAccessibilityFeedback] = useState([]);
+  const [loadingFeedback, setLoadingFeedback] = useState(false);
   const navigation = useNavigation();
   const [places, setPlaces] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [selectedImageIndex, setSelectedImageIndex] = useState(null);
+  const [imageViewerVisible, setImageViewerVisible] = useState(false);
+  const [selectedFeedback, setSelectedFeedback] = useState(null);
 
   // Fetch places when activeCategory changes
   useEffect(() => {
@@ -41,11 +110,90 @@ const PlacesTab = () => {
     fetchPlaces();
   }, [activeCategory]);
 
+  // Update the fetchAccessibilityFeedback function to include user data
+  const fetchAccessibilityFeedback = async (coordinates) => {
+    try {
+      setLoadingFeedback(true);
+      const feedbackRef = collection(db, "accessibility_feedback");
+      const q = query(feedbackRef, where("status", "==", "approved"));
+      const querySnapshot = await getDocs(q);
+      
+      // Get all feedback within 100 meters
+      const nearbyFeedback = querySnapshot.docs
+        .map(doc => ({ id: doc.id, ...doc.data() }))
+        .filter(feedback => {
+          if (!feedback.coordinate) return false;
+          const distance = calculateDistance(coordinates, feedback.coordinate);
+          return distance <= 100; // 100 meters radius
+        });
+
+      // Fetch user information for each feedback
+      const feedbackWithUserInfo = await Promise.all(
+        nearbyFeedback.map(async (feedback) => {
+          if (feedback.userId) {
+            try {
+              const userDoc = await getDoc(doc(db, "users", feedback.userId));
+              if (userDoc.exists()) {
+                const userData = userDoc.data();
+                return {
+                  ...feedback,
+                  userName: userData.name || userData.displayName,
+                  userPhoto: userData.photoURL,
+                  userEmail: userData.email
+                };
+              }
+            } catch (error) {
+              console.error("Error fetching user data:", error);
+            }
+          }
+          return feedback;
+        })
+      );
+
+      return feedbackWithUserInfo;
+    } catch (error) {
+      console.error('Error fetching accessibility feedback:', error);
+      return [];
+    } finally {
+      setLoadingFeedback(false);
+    }
+  };
+
   const handlePlacePress = async (place) => {
     try {
       setIsLoading(true);
       const detailedPlace = await getPlaceDetails(place.id);
-      setSelectedPlace(detailedPlace);
+      
+      // Fetch accessibility feedback for this location
+      const feedback = await fetchAccessibilityFeedback({
+        latitude: place.coordinates.latitude,
+        longitude: place.coordinates.longitude
+      });
+      
+      // Combine accessibility features from all feedback
+      const accessibilityFeatures = new Set();
+      feedback.forEach(item => {
+        if (item.features && Array.isArray(item.features)) {
+          item.features.forEach(feature => accessibilityFeatures.add(feature));
+        }
+      });
+
+      // Update the detailed place with feedback data
+      const placeWithFeedback = {
+        ...detailedPlace,
+        accessibilityFeedback: feedback,
+        accessibility: {
+          ...detailedPlace.accessibility,
+          wheelchairRamps: accessibilityFeatures.has('wheelchairRamps'),
+          elevators: accessibilityFeatures.has('elevators'),
+          widePathways: accessibilityFeatures.has('widePathways'),
+          pwdRestrooms: accessibilityFeatures.has('pwdRestrooms'),
+          hasAccessibilityData: feedback.length > 0
+        }
+      };
+
+      setSelectedPlace(placeWithFeedback);
+      setAccessibilityFeedback(feedback);
       setShowDetails(true);
     } catch (err) {
       console.error('Error fetching place details:', err);
@@ -73,6 +221,7 @@ const PlacesTab = () => {
     });
   };
 
+  // Render place card component
   const renderPlaceCard = (place) => (
     <TouchableOpacity 
       key={place.id} 
@@ -117,6 +266,49 @@ const PlacesTab = () => {
     </TouchableOpacity>
   );
 
+  // Function to get the icon name for each category
+  const getCategoryIcon = (id) => {
+    switch (id) {
+      case 'coffee':
+        return 'cafe-outline';
+      case 'restaurants':
+        return 'restaurant-outline';
+      case 'malls':
+        return 'cart-outline';
+      case 'schools':
+        return 'school-outline';
+      case 'hospitals':
+        return 'medical-outline';
+      default:
+        return 'location-outline';
+    }
+  };
+
+  // Update the feedback display in renderPlaceDetails
+  const renderFeedbackUser = (feedback) => (
+    <View style={styles.userInfo}>
+      {feedback.userPhoto ? (
+        <Image 
+          source={{ uri: feedback.userPhoto }} 
+          style={styles.userAvatar}
+        />
+      ) : (
+        <View style={styles.userIconContainer}>
+          <Ionicons name="person" size={16} color="#40B59F" />
+        </View>
+      )}
+      <View style={styles.userTextContainer}>
+        <Text style={styles.userName}>
+          {feedback.userName || feedback.userEmail?.split('@')[0] || 'Anonymous User'}
+        </Text>
+        <Text style={styles.feedbackDate}>
+          {new Date(feedback.timestamp).toLocaleDateString()}
+        </Text>
+      </View>
+    </View>
+  );
+
+  // Render place details modal
   const renderPlaceDetails = () => (
     <Modal
       visible={showDetails}
@@ -136,10 +328,12 @@ const PlacesTab = () => {
               style={styles.modalImage}
               resizeMode="cover"
             />
-            <View style={styles.ratingBadge}>
-              <Ionicons name="star" size={14} color="#fff" />
-              <Text style={styles.ratingBadgeText}>{selectedPlace?.rating}</Text>
-            </View>
+            {selectedPlace?.rating && (
+              <View style={styles.ratingBadge}>
+                <Ionicons name="star" size={14} color="#fff" />
+                <Text style={styles.ratingBadgeText}>{selectedPlace.rating}</Text>
+              </View>
+            )}
             <TouchableOpacity 
               style={styles.closeButton}
               onPress={() => setShowDetails(false)}
@@ -173,20 +367,18 @@ const PlacesTab = () => {
                 <Text style={styles.detailText}>{selectedPlace?.contact}</Text>
               </View>
             </View>
-            
+
             {selectedPlace?.accessibility && (
               <>
                 <View style={styles.separator} />
-                
                 <Text style={styles.descriptionTitle}>Accessibility Features</Text>
-                
                 <View style={styles.accessibilityContainer}>
-                  {selectedPlace.accessibility.wheelchair && (
+                  {selectedPlace.accessibility.wheelchairRamps && (
                     <View style={styles.accessibilityItem}>
                       <View style={styles.accessibilityIcon}>
                         <Ionicons name="accessibility" size={18} color="#40B59F" />
                       </View>
-                      <Text style={styles.accessibilityText}>Wheelchair Accessible</Text>
+                      <Text style={styles.accessibilityText}>Wheelchair Ramps Available</Text>
                     </View>
                   )}
                   
@@ -199,47 +391,103 @@ const PlacesTab = () => {
                     </View>
                   )}
                   
-                  {selectedPlace.accessibility.restrooms && (
+                  {selectedPlace.accessibility.widePathways && (
+                    <View style={styles.accessibilityItem}>
+                      <View style={styles.accessibilityIcon}>
+                        <Ionicons name="resize" size={18} color="#40B59F" />
+                      </View>
+                      <Text style={styles.accessibilityText}>Wide Pathways</Text>
+                    </View>
+                  )}
+                  
+                  {selectedPlace.accessibility.pwdRestrooms && (
                     <View style={styles.accessibilityItem}>
                       <View style={styles.accessibilityIcon}>
                         <Ionicons name="water" size={18} color="#40B59F" />
                       </View>
-                      <Text style={styles.accessibilityText}>Accessible Restrooms</Text>
-                    </View>
-                  )}
-                  
-                  {selectedPlace.accessibility.parking && (
-                    <View style={styles.accessibilityItem}>
-                      <View style={styles.accessibilityIcon}>
-                        <Ionicons name="car" size={18} color="#40B59F" />
-                      </View>
-                      <Text style={styles.accessibilityText}>Dedicated Parking</Text>
-                    </View>
-                  )}
-                  
-                  {selectedPlace.accessibility.braille && (
-                    <View style={styles.accessibilityItem}>
-                      <View style={styles.accessibilityIcon}>
-                        <Ionicons name="document-text" size={18} color="#40B59F" />
-                      </View>
-                      <Text style={styles.accessibilityText}>Braille Signage</Text>
-                    </View>
-                  )}
-                  
-                  {selectedPlace.accessibility.staffAssistance && (
-                    <View style={styles.accessibilityItem}>
-                      <View style={styles.accessibilityIcon}>
-                        <Ionicons name="people" size={18} color="#40B59F" />
-                      </View>
-                      <Text style={styles.accessibilityText}>Staff Assistance Available</Text>
+                      <Text style={styles.accessibilityText}>PWD Restrooms</Text>
                     </View>
                   )}
                 </View>
+
+                {/* Community Feedback Section */}
+                {selectedPlace?.accessibilityFeedback && selectedPlace.accessibilityFeedback.length > 0 && (
+                  <>
+                    <View style={styles.separator} />
+                    <Text style={styles.descriptionTitle}>Community Feedback</Text>
+                    <View style={styles.feedbackContainer}>
+                      {selectedPlace.accessibilityFeedback.map((feedback, index) => (
+                        <View key={feedback.id} style={styles.feedbackItem}>
+                          <View style={styles.feedbackHeader}>
+                            {renderFeedbackUser(feedback)}
+                          </View>
+                          
+                          {feedback.comment && (
+                            <Text style={styles.feedbackComment}>{feedback.comment}</Text>
+                          )}
+
+                          {feedback.photos && feedback.photos.length > 0 && (
+                            <View style={styles.feedbackPhotosGrid}>
+                              <ScrollView 
+                                horizontal 
+                                showsHorizontalScrollIndicator={false}
+                                style={styles.photoScroll}
+                              >
+                                {feedback.photos.map((photo, photoIndex) => (
+                                  <TouchableOpacity
+                                    key={photoIndex}
+                                    style={styles.feedbackPhotoContainer}
+                                    onPress={() => {
+                                      setSelectedFeedback(feedback);
+                                      setSelectedImageIndex(photoIndex);
+                                      setImageViewerVisible(true);
+                                    }}
+                                  >
+                                    <Image
+                                      source={{ uri: `data:image/jpeg;base64,${photo}` }}
+                                      style={styles.feedbackPhoto}
+                                      resizeMode="cover"
+                                    />
+                                    {feedback.features && feedback.features.length > 0 && (
+                                      <View style={styles.photoFeatureIndicator}>
+                                        <Ionicons 
+                                          name={getFeatureIcon(feedback.features[0])} 
+                                          size={12} 
+                                          color="white" 
+                                        />
+                                      </View>
+                                    )}
+                                  </TouchableOpacity>
+                                ))}
+                              </ScrollView>
+                            </View>
+                          )}
+
+                          {feedback.features && feedback.features.length > 0 && (
+                            <View style={styles.feedbackFeatures}>
+                              {feedback.features.map((feature, featureIndex) => (
+                                <View key={featureIndex} style={styles.featureTag}>
+                                  <Ionicons 
+                                    name={getFeatureIcon(feature)} 
+                                    size={12} 
+                                    color="#40B59F" 
+                                  />
+                                  <Text style={styles.featureTagText}>
+                                    {getFeatureLabel(feature)}
+                                  </Text>
+                                </View>
+                              ))}
+                            </View>
+                          )}
+                        </View>
+                      ))}
+                    </View>
+                  </>
+                )}
               </>
             )}
             
             <View style={styles.separator} />
-            
             <Text style={styles.descriptionTitle}>About</Text>
             <Text style={styles.description}>{selectedPlace?.description}</Text>
             
@@ -253,22 +501,77 @@ const PlacesTab = () => {
           </ScrollView>
         </View>
       </View>
+
+      {/* Full Screen Image Viewer Modal */}
+      <Modal
+        visible={imageViewerVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => {
+          setImageViewerVisible(false);
+          setSelectedImageIndex(null);
+          setSelectedFeedback(null);
+        }}
+      >
+        <View style={styles.imageViewerOverlay}>
+          <TouchableOpacity
+            style={styles.closeImageButton}
+            onPress={() => {
+              setImageViewerVisible(false);
+              setSelectedImageIndex(null);
+              setSelectedFeedback(null);
+            }}
+          >
+            <Ionicons name="close" size={24} color="white" />
+          </TouchableOpacity>
+          
+          {selectedFeedback && selectedFeedback.photos && selectedImageIndex !== null && (
+            <View style={styles.fullImageContainer}>
+              <Image
+                source={{ 
+                  uri: `data:image/jpeg;base64,${selectedFeedback.photos[selectedImageIndex]}` 
+                }}
+                style={styles.fullScreenImage}
+                resizeMode="contain"
+              />
+              
+              <View style={styles.imageNavigationBar}>
+                <TouchableOpacity
+                  style={[
+                    styles.imageNavButton,
+                    selectedImageIndex === 0 && styles.imageNavButtonDisabled
+                  ]}
+                  onPress={() => selectedImageIndex > 0 && setSelectedImageIndex(selectedImageIndex - 1)}
+                  disabled={selectedImageIndex === 0}
+                >
+                  <Ionicons name="chevron-back" size={24} color="white" />
+                </TouchableOpacity>
+                
+                <Text style={styles.imageCounter}>
+                  {selectedImageIndex + 1} / {selectedFeedback.photos.length}
+                </Text>
+                
+                <TouchableOpacity
+                  style={[
+                    styles.imageNavButton,
+                    selectedImageIndex === selectedFeedback.photos.length - 1 && 
+                    styles.imageNavButtonDisabled
+                  ]}
+                  onPress={() => 
+                    selectedImageIndex < selectedFeedback.photos.length - 1 && 
+                    setSelectedImageIndex(selectedImageIndex + 1)
+                  }
+                  disabled={selectedImageIndex === selectedFeedback.photos.length - 1}
+                >
+                  <Ionicons name="chevron-forward" size={24} color="white" />
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+        </View>
+      </Modal>
     </Modal>
   );
-
-  // Function to get the icon name for each category
-  const getCategoryIcon = (id) => {
-    switch (id) {
-      case 'coffee':
-        return 'cafe-outline';
-      case 'restaurants':
-        return 'restaurant-outline';
-      case 'malls':
-        return 'cart-outline';
-      default:
-        return 'location-outline';
-    }
-  };
 
   return (
     <SafeAreaView style={styles.container}>
@@ -711,6 +1014,164 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     marginLeft: 8,
     letterSpacing: 0.2,
+  },
+  feedbackContainer: {
+    padding: 20,
+    backgroundColor: '#f8f9fa',
+    borderRadius: 12,
+    marginHorizontal: 20,
+  },
+  feedbackItem: {
+    marginBottom: 20,
+    backgroundColor: 'white',
+    borderRadius: 12,
+    padding: 16,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  feedbackHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+    gap: 8,
+  },
+  feedbackDate: {
+    fontSize: 14,
+    color: '#6c757d',
+    fontWeight: '500',
+  },
+  feedbackComment: {
+    fontSize: 15,
+    color: '#343a40',
+    lineHeight: 22,
+  },
+  feedbackPhotosGrid: {
+    marginTop: 12,
+  },
+  photoScroll: {
+    flexGrow: 0,
+  },
+  feedbackPhotoContainer: {
+    marginRight: 8,
+    borderRadius: 8,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  feedbackPhoto: {
+    width: 120,
+    height: 120,
+    borderRadius: 8,
+  },
+  photoFeatureIndicator: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: 'rgba(64, 181, 159, 0.9)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  feedbackFeatures: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginTop: 12,
+    gap: 8,
+  },
+  featureTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(64, 181, 159, 0.1)',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 16,
+    gap: 4,
+  },
+  featureTagText: {
+    fontSize: 12,
+    color: '#40B59F',
+    fontWeight: '500',
+  },
+  userInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  userAvatar: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    marginRight: 8,
+  },
+  userIconContainer: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(64, 181, 159, 0.1)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 8,
+  },
+  userTextContainer: {
+    flex: 1,
+  },
+  userName: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#343a40',
+    marginBottom: 2,
+  },
+  imageViewerOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.9)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  closeImageButton: {
+    position: 'absolute',
+    top: 40,
+    right: 20,
+    zIndex: 10,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    padding: 8,
+    borderRadius: 20,
+  },
+  fullImageContainer: {
+    width: '100%',
+    height: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  fullScreenImage: {
+    width: '100%',
+    height: '80%',
+  },
+  imageNavigationBar: {
+    position: 'absolute',
+    bottom: 40,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+    paddingHorizontal: 20,
+  },
+  imageNavButton: {
+    padding: 12,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    borderRadius: 25,
+  },
+  imageNavButtonDisabled: {
+    opacity: 0.5,
+  },
+  imageCounter: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
+    marginHorizontal: 20,
   },
 });
 
