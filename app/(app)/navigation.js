@@ -24,7 +24,7 @@ import { useNavigation, useRoute } from "@react-navigation/native"
 import { useAuth } from "../../context/authContext"
 import { JEEPNEY_ROUTES_DETAILED } from "./jeepney_routes"
 
-const API_KEY = "AlzaSyuXryjNYbGxgqXXsY8cgTEnntUZn7XnnLA"
+const API_KEY = "AlzaSyuXryjNYbGxqXXsY8cgTEnntUZn7XnnLA"
 
 // Smart jeepney route recommendation system
 class SmartJeepneyOptimizer {
@@ -58,30 +58,39 @@ class SmartJeepneyOptimizer {
   findOptimalRoutes(userLocation, destination, maxWalkingDistance = 0.5) {
     console.log("🚌 Starting smart jeepney route analysis...")
 
-    // Step 1: Find all routes near user location and destination
-    const nearbyStartRoutes = this.findNearbyRoutes(userLocation, maxWalkingDistance)
-    const nearbyEndRoutes = this.findNearbyRoutes(destination, maxWalkingDistance)
+    try {
+      // Step 1: Find all routes near user location and destination
+      const nearbyStartRoutes = this.findNearbyRoutes(userLocation, maxWalkingDistance)
+      const nearbyEndRoutes = this.findNearbyRoutes(destination, maxWalkingDistance)
 
-    console.log(
-      `📍 Found ${nearbyStartRoutes.length} routes near start, ${nearbyEndRoutes.length} routes near destination`,
-    )
+      console.log(
+        `📍 Found ${nearbyStartRoutes.length} routes near start, ${nearbyEndRoutes.length} routes near destination`,
+      )
 
-    // Step 2: Find single jeepney solutions (same route, any direction)
-    const singleJeepneyRoutes = this.findBestDirectionRoutes(nearbyStartRoutes, nearbyEndRoutes)
+      // Step 2: Find single jeepney solutions (same route, any direction)
+      const singleJeepneyRoutes = this.findBestDirectionRoutes(nearbyStartRoutes, nearbyEndRoutes)
 
-    if (singleJeepneyRoutes.length > 0) {
-      console.log(`✅ Found ${singleJeepneyRoutes.length} single jeepney solutions`)
-      return singleJeepneyRoutes.slice(0, 1) // Return only the best single route
+      if (singleJeepneyRoutes && singleJeepneyRoutes.length > 0) {
+        console.log(`✅ Found ${singleJeepneyRoutes.length} single jeepney solutions`)
+        return singleJeepneyRoutes.slice(0, 1) // Return only the best single route
+      }
+
+      // Step 3: Find transfer routes between different jeepney lines (last resort)
+      const transferRoutes = this.findTransferRoutes(nearbyStartRoutes, nearbyEndRoutes)
+
+      console.log(`🔄 Found ${transferRoutes.length} transfer solutions`)
+      return transferRoutes.length > 0 ? transferRoutes.slice(0, 2) : [] // Return top 2 transfer options
+    } catch (error) {
+      console.error("Error in findOptimalRoutes:", error)
+      return []
     }
-
-    // Step 3: Find transfer routes between different jeepney lines (last resort)
-    const transferRoutes = this.findTransferRoutes(nearbyStartRoutes, nearbyEndRoutes)
-
-    console.log(`🔄 Found ${transferRoutes.length} transfer solutions`)
-    return transferRoutes.slice(0, 2) // Return top 2 transfer options
   }
 
   findBestDirectionRoutes(startRoutes, endRoutes) {
+    if (!startRoutes || !endRoutes || startRoutes.length === 0 || endRoutes.length === 0) {
+      return []
+    }
+
     const directRoutes = []
 
     // Group routes by route ID to combine inbound/outbound
@@ -273,6 +282,10 @@ class SmartJeepneyOptimizer {
   }
 
   findTransferRoutes(startRoutes, endRoutes) {
+    if (!startRoutes || !endRoutes || startRoutes.length === 0 || endRoutes.length === 0) {
+      return []
+    }
+
     const transferRoutes = []
 
     startRoutes.forEach((startRoute) => {
@@ -281,7 +294,7 @@ class SmartJeepneyOptimizer {
         if (startRoute.routeId !== endRoute.routeId) {
           const transferPoints = this.findTransferPointsBetweenRoutes(startRoute, endRoute)
 
-          if (transferPoints.length > 0) {
+          if (transferPoints && transferPoints.length > 0) {
             const bestTransfer = transferPoints[0]
 
             transferRoutes.push({
@@ -327,12 +340,16 @@ class SmartJeepneyOptimizer {
   }
 
   findNearbyRoutes(location, maxDistance) {
+    if (!location) return []
+
     const nearby = []
 
     this.routeGraph.forEach((routeInfo, pathKey) => {
+      if (!routeInfo.coordinates || routeInfo.coordinates.length === 0) return
+
       const nearestPoint = this.findNearestPointOnRoute(routeInfo, location)
 
-      if (nearestPoint.distance <= maxDistance) {
+      if (nearestPoint && nearestPoint.distance <= maxDistance) {
         nearby.push({
           ...routeInfo,
           accessPoint: routeInfo.coordinates[nearestPoint.pointIndex],
@@ -347,10 +364,14 @@ class SmartJeepneyOptimizer {
   }
 
   findNearestPointOnRoute(route, location) {
+    if (!route.coordinates || !location) return null
+
     let minDistance = Number.POSITIVE_INFINITY
     let nearestPointIndex = -1
 
     route.coordinates.forEach((coord, index) => {
+      if (!coord || !coord.lat || !coord.lng) return
+
       const distance = this.calculateDistance(location.latitude, location.longitude, coord.lat, coord.lng)
 
       if (distance < minDistance) {
@@ -359,6 +380,8 @@ class SmartJeepneyOptimizer {
       }
     })
 
+    if (nearestPointIndex === -1) return null
+
     return {
       distance: minDistance,
       pointIndex: nearestPointIndex,
@@ -366,32 +389,9 @@ class SmartJeepneyOptimizer {
     }
   }
 
-  findTransferPointsBetweenDirections(route1, route2) {
-    const transferPoints = []
-    const maxTransferDistance = 0.3 // 300 meters
-
-    route1.coordinates.forEach((point1, idx1) => {
-      route2.coordinates.forEach((point2, idx2) => {
-        const distance = this.calculateDistance(point1.lat, point1.lng, point2.lat, point2.lng)
-
-        if (distance <= maxTransferDistance) {
-          transferPoints.push({
-            location: {
-              latitude: (point1.lat + point2.lat) / 2,
-              longitude: (point1.lng + point2.lng) / 2,
-            },
-            outboundIndex: route1.isOutbound ? idx1 : idx2,
-            inboundIndex: route1.isInbound ? idx1 : idx2,
-            walkingDistance: distance,
-          })
-        }
-      })
-    })
-
-    return transferPoints.sort((a, b) => a.walkingDistance - b.walkingDistance)
-  }
-
   findTransferPointsBetweenRoutes(route1, route2) {
+    if (!route1 || !route2 || !route1.coordinates || !route2.coordinates) return []
+
     const transferPoints = []
     const maxTransferDistance = 0.3
 
@@ -401,6 +401,8 @@ class SmartJeepneyOptimizer {
 
     route1Segment.forEach((point1, idx1) => {
       route2Segment.forEach((point2, idx2) => {
+        if (!point1 || !point2 || !point1.lat || !point1.lng || !point2.lat || !point2.lng) return
+
         const distance = this.calculateDistance(point1.lat, point1.lng, point2.lat, point2.lng)
 
         if (distance <= maxTransferDistance) {
@@ -430,6 +432,8 @@ class SmartJeepneyOptimizer {
   }
 
   extractRouteSegment(coordinates, startIndex, endIndex) {
+    if (!coordinates || !Array.isArray(coordinates)) return []
+
     return coordinates.slice(startIndex, endIndex + 1).map((coord) => ({
       latitude: coord.lat,
       longitude: coord.lng,
@@ -437,6 +441,8 @@ class SmartJeepneyOptimizer {
   }
 
   calculateRouteSegmentDistance(startRoute, endRoute) {
+    if (!startRoute || !endRoute || !startRoute.coordinates) return 0
+
     let totalDistance = 0
     const coordinates = startRoute.coordinates
 
@@ -452,10 +458,6 @@ class SmartJeepneyOptimizer {
     }
 
     return totalDistance
-  }
-
-  calculateDistanceBetweenPoints(point1, point2) {
-    return this.calculateDistance(point1.lat, point1.lng, point2.lat, point2.lng)
   }
 
   estimateDirectRouteTime(startRoute, endRoute, routeDistance) {
@@ -489,42 +491,23 @@ class SmartJeepneyOptimizer {
     ]
   }
 
-  generateCombinedRouteInstructions(route, startPoint, endPoint, type) {
-    const direction = route.isInbound ? "inbound" : "outbound"
-    return [
-      `Walk ${Math.round(startPoint.distance * 1000)}m to ${route.routeName} jeepney stop`,
-      `Board ${route.routeName} jeepney (${direction} direction)`,
-      `Stay on the jeepney - this route will take you directly to your destination`,
-      `Alight at your destination stop`,
-      `Walk ${Math.round(endPoint.distance * 1000)}m to your final destination`,
-    ]
-  }
-
   generateTransferInstructions(firstRoute, secondRoute, transferPoint) {
     return [
       `Walk ${Math.round(firstRoute.walkingDistance * 1000)}m to ${firstRoute.routeName} jeepney stop`,
-      `Board ${firstRoute.routeName} jeepney`,
-      `Ride to transfer point`,
-      `Walk ${Math.round(transferPoint.walkingDistance * 1000)}m to ${secondRoute.routeName} jeepney stop`,
-      `Board ${secondRoute.routeName} jeepney`,
-      `Ride to your destination`,
-      `Walk ${Math.round(secondRoute.walkingDistance * 1000)}m to your final destination`,
-    ]
-  }
-
-  generateTransferRouteInstructions(firstRoute, secondRoute, startPoint, transferPoint, endPoint) {
-    return [
-      `Walk ${Math.round(startPoint.distance * 1000)}m to ${firstRoute.routeName} jeepney stop`,
       `Board ${firstRoute.routeName} jeepney (${firstRoute.isInbound ? "inbound" : "outbound"} direction)`,
       `Ride to transfer point`,
       `Walk ${Math.round(transferPoint.walkingDistance * 1000)}m to ${secondRoute.routeName} jeepney stop`,
       `Board ${secondRoute.routeName} jeepney (${secondRoute.isInbound ? "inbound" : "outbound"} direction)`,
       `Ride to your destination`,
-      `Walk ${Math.round(endPoint.distance * 1000)}m to your final destination`,
+      `Walk ${Math.round(secondRoute.walkingDistance * 1000)}m to your final destination`,
     ]
   }
 
   calculateDistance(lat1, lon1, lat2, lon2) {
+    if (typeof lat1 !== "number" || typeof lon1 !== "number" || typeof lat2 !== "number" || typeof lon2 !== "number") {
+      return 0
+    }
+
     const R = 6371 // Earth's radius in km
     const dLat = ((lat2 - lat1) * Math.PI) / 180
     const dLon = ((lon2 - lon1) * Math.PI) / 180
@@ -925,10 +908,9 @@ export default function SmartJeepneyNavigation() {
     switch (type) {
       case "direct":
         return "#4CAF50"
-      case "combined":
+      case "combined-direction":
         return "#2196F3"
       case "transfer":
-      case "combined-transfer":
         return "#FF9800"
       default:
         return "#757575"
@@ -1079,7 +1061,7 @@ export default function SmartJeepneyNavigation() {
                 />
               )}
 
-              {/* Combined direction routes */}
+              {/* Combined direction routes - solid line, not dashed */}
               {selectedJeepneyRoute.type === "combined-direction" && routePath.length > 0 && (
                 <Polyline
                   coordinates={routePath}
@@ -1087,14 +1069,13 @@ export default function SmartJeepneyNavigation() {
                   strokeColor={getRouteColor(selectedJeepneyRoute.routeId)}
                   lineCap="round"
                   lineJoin="round"
-                  lineDashPattern={[15, 5]} // Dashed line to show it's a combined route
                 />
               )}
 
               {/* Transfer routes with multiple segments */}
               {selectedJeepneyRoute.type === "transfer" && selectedJeepneyRoute.routePath && (
                 <>
-                  {selectedJeepneyRoute.routePath.firstPath && (
+                  {selectedJeepneyRoute.routePath.firstPath && selectedJeepneyRoute.routePath.firstPath.length > 0 && (
                     <Polyline
                       coordinates={selectedJeepneyRoute.routePath.firstPath}
                       strokeWidth={6}
@@ -1105,18 +1086,18 @@ export default function SmartJeepneyNavigation() {
                       lineJoin="round"
                     />
                   )}
-                  {selectedJeepneyRoute.routePath.secondPath && (
-                    <Polyline
-                      coordinates={selectedJeepneyRoute.routePath.secondPath}
-                      strokeWidth={6}
-                      strokeColor={getRouteColor(
-                        selectedJeepneyRoute.secondRoute?.routeId || selectedJeepneyRoute.routeId,
-                      )}
-                      lineCap="round"
-                      lineJoin="round"
-                      lineDashPattern={[10, 5]}
-                    />
-                  )}
+                  {selectedJeepneyRoute.routePath.secondPath &&
+                    selectedJeepneyRoute.routePath.secondPath.length > 0 && (
+                      <Polyline
+                        coordinates={selectedJeepneyRoute.routePath.secondPath}
+                        strokeWidth={6}
+                        strokeColor={getRouteColor(
+                          selectedJeepneyRoute.secondRoute?.routeId || selectedJeepneyRoute.routeId,
+                        )}
+                        lineCap="round"
+                        lineJoin="round"
+                      />
+                    )}
                   {selectedJeepneyRoute.routePath.transferPoint && (
                     <Marker coordinate={selectedJeepneyRoute.routePath.transferPoint} title="Transfer Point">
                       <View style={styles.transferMarker}>
@@ -1330,23 +1311,17 @@ export default function SmartJeepneyNavigation() {
                     trip
                   </Text>
 
-                  {recommendation.type === "combined" && recommendation.subType?.includes("direct") && (
-                    <Text style={styles.recommendationSpecial}>✨ Single jeepney - no transfers needed!</Text>
-                  )}
-
-                  {(recommendation.type === "transfer" || recommendation.type === "combined-transfer") && (
-                    <Text style={styles.recommendationTransfer}>
-                      🔄 Transfer required • {recommendation.firstRoute?.routeName || recommendation.routeName} →{" "}
-                      {recommendation.secondRoute?.routeName || "Same route"}
+                  {recommendation.type === "combined-direction" && (
+                    <Text style={styles.recommendationSpecial}>
+                      ✨ Same jeepney - just stay on as it changes direction
                     </Text>
                   )}
 
-                  {recommendation.subType?.includes("outbound-to-inbound") && (
-                    <Text style={styles.recommendationLoop}>🔄 Outbound → Inbound transfer on same route</Text>
-                  )}
-
-                  {recommendation.subType?.includes("inbound-to-outbound") && (
-                    <Text style={styles.recommendationLoop}>🔄 Inbound → Outbound transfer on same route</Text>
+                  {recommendation.type === "transfer" && (
+                    <Text style={styles.recommendationTransfer}>
+                      🔄 Transfer required • {recommendation.firstRoute?.routeName} →{" "}
+                      {recommendation.secondRoute?.routeName}
+                    </Text>
                   )}
                 </TouchableOpacity>
               ))}
