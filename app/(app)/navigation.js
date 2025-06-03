@@ -12,6 +12,9 @@ import {
   ScrollView,
   SafeAreaView,
   Modal,
+  Linking,
+  Platform,
+  Alert,
 } from "react-native"
 import MapView, { Marker, Polyline } from "react-native-maps"
 import * as Location from "expo-location"
@@ -53,8 +56,9 @@ export default function Navigation() {
   // Jeepney specific state
   const [jeepneyRoute, setJeepneyRoute] = useState(null)
   const [jeepneyRecommendations, setJeepneyRecommendations] = useState([])
+  const [selectedJeepneyRoute, setSelectedJeepneyRoute] = useState(null)
   const [showJeepneyRoutesModal, setShowJeepneyRoutesModal] = useState(false)
-  const [alternativeJeepneyRoutes, setAlternativeJeepneyRoutes] = useState([])
+  const [showAllRoutes, setShowAllRoutes] = useState(false)
 
   const mapRef = useRef(null)
   const searchTimeoutRef = useRef(null)
@@ -115,7 +119,7 @@ export default function Navigation() {
     }
   }, [navigationRoute.params])
 
-  // Search for places
+  // Search for places using Google Places API
   const fetchPlaces = async (text) => {
     setQuery(text)
     if (text.length < 3) {
@@ -150,7 +154,7 @@ export default function Navigation() {
     }, 500)
   }
 
-  // Fetch place details
+  // Fetch place details using Google Places API
   const fetchPlaceDetails = async (placeId) => {
     try {
       setLoading(true)
@@ -183,7 +187,7 @@ export default function Navigation() {
     }
   }
 
-  // Fetch directions for different modes
+  // Fetch directions for different modes using Google Directions API
   const fetchDirections = async () => {
     if (!userLocation || !selectedLocation) {
       console.warn("User location or destination not set")
@@ -267,7 +271,7 @@ export default function Navigation() {
     }
   }
 
-  // Fetch safest walking route
+  // Fetch safest walking route using Google Directions API
   const fetchSafestWalkingRoute = async () => {
     try {
       const response = await axios.get("https://maps.gomaps.pro/maps/api/directions/json", {
@@ -297,46 +301,42 @@ export default function Navigation() {
     const routesNearUser = findJeepneyRoutesWithinRadius(userLocation, 0.5)
     const routesNearDestination = findJeepneyRoutesWithinRadius(selectedLocation, 0.5)
 
-    // Find direct routes (same jeepney serves both locations)
+    // Find direct routes
     const directRoutes = []
-
     routesNearUser.forEach((userRoute) => {
       routesNearDestination.forEach((destRoute) => {
-        // Only consider routes where the same jeepney (same routeId AND pathId) passes both points
         if (userRoute.routeId === destRoute.routeId && userRoute.pathId === destRoute.pathId) {
-          // Check if the destination point comes after the user point in the route
-          const isValidDirection = isPointAfterInRoute(
-            userRoute.routeId,
-            userRoute.pathId,
-            userRoute.nearestPointIndex,
-            destRoute.nearestPointIndex,
-          )
-
-          if (isValidDirection) {
+          // Check if destination comes after origin in the route
+          if (destRoute.nearestPointIndex > userRoute.nearestPointIndex) {
             directRoutes.push({
               ...userRoute,
               type: "direct",
               destinationPoint: destRoute.nearestPoint,
               destinationPointIndex: destRoute.nearestPointIndex,
+              destinationDistance: destRoute.distance,
             })
           }
         }
       })
     })
 
-    // Find transfer routes only if no direct routes are available
+    // Find transfer routes
     const transferRoutes = []
-    if (directRoutes.length === 0) {
+    if (directRoutes.length < 2) {
+      // Find transfers if we have fewer than 2 direct routes
       routesNearUser.forEach((userRoute) => {
         routesNearDestination.forEach((destRoute) => {
           if (userRoute.routeId !== destRoute.routeId) {
-            const transferPoint = findTransferPoint(userRoute, destRoute)
-            if (transferPoint) {
+            const transferPoints = findPossibleTransferPoints(userRoute, destRoute)
+            if (transferPoints.length > 0) {
+              // Use the best transfer point (closest to both routes)
+              const bestTransferPoint = transferPoints[0]
               transferRoutes.push({
                 firstRoute: userRoute,
                 secondRoute: destRoute,
-                transferPoint: transferPoint,
+                transferPoint: bestTransferPoint,
                 type: "transfer",
+                totalDistance: userRoute.distance + destRoute.distance + bestTransferPoint.transferDistance,
               })
             }
           }
@@ -344,41 +344,73 @@ export default function Navigation() {
       })
     }
 
-    // Combine and sort recommendations
-    const recommendations = [...directRoutes, ...transferRoutes].sort((a, b) => a.distance - b.distance)
+    // Sort all routes by total distance
+    const allRoutes = [
+      ...directRoutes.map((route) => ({
+        ...route,
+        totalDistance: route.distance + route.destinationDistance,
+      })),
+      ...transferRoutes,
+    ].sort((a, b) => a.totalDistance - b.totalDistance)
 
-    setJeepneyRecommendations(recommendations.slice(0, 3)) // Top 3 recommendations
+    setJeepneyRecommendations(allRoutes.slice(0, 3)) // Top 3 recommendations
 
-    // Set the best route as primary and display the actual jeepney path
-    if (recommendations.length > 0) {
-      const bestRoute = recommendations[0]
-      if (bestRoute.type === "direct") {
-        const jeepneyRouteData = createDirectJeepneyRoute(bestRoute)
-        setJeepneyRoute(jeepneyRouteData)
-
-        // Display the actual jeepney route path on map
-        if (jeepneyRouteData && jeepneyRouteData.routePath) {
-          setRoutePath(jeepneyRouteData.routePath)
-          fitMapToRoute(jeepneyRouteData.routePath)
-        }
-      } else {
-        const jeepneyRouteData = createTransferJeepneyRoute(bestRoute)
-        setJeepneyRoute(jeepneyRouteData)
-
-        // For transfer routes, show both route segments
-        if (jeepneyRouteData && jeepneyRouteData.combinedPath) {
-          setRoutePath(jeepneyRouteData.combinedPath)
-          fitMapToRoute(jeepneyRouteData.combinedPath)
-        }
-      }
+    // Set the best route as selected
+    if (allRoutes.length > 0) {
+      selectJeepneyRoute(allRoutes[0])
+    } else {
+      setJeepneyRoute(null)
+      setSelectedJeepneyRoute(null)
+      setRoutePath([])
     }
   }
 
-  // Add this helper function to check if destination point comes after origin point in the route
-  const isPointAfterInRoute = (routeId, pathId, originIndex, destIndex) => {
-    // If the destination index is greater than the origin index, it means
-    // the destination comes after the origin in the route direction
-    return destIndex > originIndex
+  // Select a jeepney route
+  const selectJeepneyRoute = (route) => {
+    setSelectedJeepneyRoute(route)
+
+    if (route.type === "direct") {
+      const routeData = createDirectJeepneyRoute(route)
+      setJeepneyRoute(routeData)
+
+      if (routeData && routeData.routePath) {
+        setRoutePath(routeData.routePath)
+        fitMapToRoute(routeData.routePath)
+      }
+
+      // Calculate ETA
+      const distanceKm = route.totalDistance
+      const walkingTimeMin = Math.round((route.distance + route.destinationDistance) * 20) // 20 min per km walking
+      const jeepneyTimeMin = Math.round(distanceKm * 5) // 5 min per km in jeepney (including stops)
+      const totalTimeMin = walkingTimeMin + jeepneyTimeMin
+
+      setEta({
+        jeepney:
+          totalTimeMin < 60 ? `${totalTimeMin} mins` : `${Math.floor(totalTimeMin / 60)} hr ${totalTimeMin % 60} mins`,
+      })
+      setDistance(`${distanceKm.toFixed(1)} km`)
+    } else {
+      const routeData = createTransferJeepneyRoute(route)
+      setJeepneyRoute(routeData)
+
+      if (routeData && routeData.combinedPath) {
+        setRoutePath(routeData.combinedPath)
+        fitMapToRoute(routeData.combinedPath)
+      }
+
+      // Calculate ETA for transfer route
+      const distanceKm = route.totalDistance
+      const walkingTimeMin = Math.round((route.firstRoute.distance + route.secondRoute.distance) * 20)
+      const jeepneyTimeMin = Math.round(distanceKm * 5)
+      const transferTimeMin = 10 // Average wait time for transfer
+      const totalTimeMin = walkingTimeMin + jeepneyTimeMin + transferTimeMin
+
+      setEta({
+        jeepney:
+          totalTimeMin < 60 ? `${totalTimeMin} mins` : `${Math.floor(totalTimeMin / 60)} hr ${totalTimeMin % 60} mins`,
+      })
+      setDistance(`${distanceKm.toFixed(1)} km`)
+    }
   }
 
   // Find jeepney routes within radius
@@ -421,6 +453,44 @@ export default function Navigation() {
     return routesWithinRadius.sort((a, b) => a.distance - b.distance)
   }
 
+  // Find possible transfer points between two routes
+  const findPossibleTransferPoints = (route1, route2) => {
+    const transferPoints = []
+    const path1 = JEEPNEY_ROUTES_DETAILED[route1.routeId].paths.find((p) => p.pathId === route1.pathId)
+    const path2 = JEEPNEY_ROUTES_DETAILED[route2.routeId].paths.find((p) => p.pathId === route2.pathId)
+
+    if (!path1 || !path2) return []
+
+    // Only consider points after the user's boarding point in route1
+    const route1Points = path1.via.slice(route1.nearestPointIndex)
+
+    // Only consider points before the destination in route2
+    const route2Points = path2.via.slice(0, route2.nearestPointIndex + 1)
+
+    // Find intersection points (where routes come close to each other)
+    route1Points.forEach((point1, idx1) => {
+      route2Points.forEach((point2, idx2) => {
+        const distance = calculateDistance(point1.lat, point1.lng, point2.lat, point2.lng)
+
+        // Consider as potential transfer if routes are within 300m of each other
+        if (distance <= 0.3) {
+          transferPoints.push({
+            point1: point1,
+            point2: point2,
+            point1Index: route1.nearestPointIndex + idx1,
+            point2Index: idx2,
+            transferDistance: distance,
+            latitude: (point1.lat + point2.lat) / 2,
+            longitude: (point1.lng + point2.lng) / 2,
+          })
+        }
+      })
+    })
+
+    // Sort by transfer distance (closest first)
+    return transferPoints.sort((a, b) => a.transferDistance - b.transferDistance)
+  }
+
   // Create direct jeepney route
   const createDirectJeepneyRoute = (routeInfo) => {
     const routeDetails = JEEPNEY_ROUTES_DETAILED[routeInfo.routeId]
@@ -458,7 +528,7 @@ export default function Navigation() {
       userAccessPoint,
       destinationAccessPoint,
       walkingDistance: routeInfo.distance,
-      routePath, // This now contains only the relevant segment
+      routePath,
       pathId: routeInfo.pathId,
       from: pathDetails.from,
       to: pathDetails.to,
@@ -478,51 +548,15 @@ export default function Navigation() {
 
     if (!firstPath || !secondPath) return null
 
-    // Find the transfer point index in the first route
-    let transferPointIndexInFirstRoute = -1
-    let minDistanceToTransfer = Number.POSITIVE_INFINITY
-
-    firstPath.via.forEach((point, index) => {
-      if (index >= routeInfo.firstRoute.nearestPointIndex) {
-        // Only consider points after boarding
-        const distance = calculateDistance(
-          point.lat,
-          point.lng,
-          routeInfo.transferPoint.latitude,
-          routeInfo.transferPoint.longitude,
-        )
-
-        if (distance < minDistanceToTransfer) {
-          minDistanceToTransfer = distance
-          transferPointIndexInFirstRoute = index
-        }
-      }
-    })
-
-    // Find the transfer point index in the second route
-    let transferPointIndexInSecondRoute = -1
-    minDistanceToTransfer = Number.POSITIVE_INFINITY
-
-    secondPath.via.forEach((point, index) => {
-      const distance = calculateDistance(
-        point.lat,
-        point.lng,
-        routeInfo.transferPoint.latitude,
-        routeInfo.transferPoint.longitude,
-      )
-
-      if (distance < minDistanceToTransfer) {
-        minDistanceToTransfer = distance
-        transferPointIndexInSecondRoute = index
-      }
-    })
-
     // Get only the relevant segment of the first route from user's boarding to transfer point
-    const firstSegment = firstPath.via.slice(routeInfo.firstRoute.nearestPointIndex, transferPointIndexInFirstRoute + 1)
+    const firstSegment = firstPath.via.slice(
+      routeInfo.firstRoute.nearestPointIndex,
+      routeInfo.transferPoint.point1Index + 1,
+    )
 
     // Get only the relevant segment of the second route from transfer point to destination
     const secondSegment = secondPath.via.slice(
-      transferPointIndexInSecondRoute,
+      routeInfo.transferPoint.point2Index,
       routeInfo.secondRoute.nearestPointIndex + 1,
     )
 
@@ -541,14 +575,16 @@ export default function Navigation() {
     const combinedPath = [...firstRoutePath, ...secondRoutePath]
 
     return {
-      ...firstRouteDetails,
       type: "transfer",
       firstRoute: firstRouteDetails,
       secondRoute: secondRouteDetails,
       firstRoutePath,
       secondRoutePath,
       combinedPath,
-      transferPoint: routeInfo.transferPoint,
+      transferPoint: {
+        latitude: routeInfo.transferPoint.latitude,
+        longitude: routeInfo.transferPoint.longitude,
+      },
       userAccessPoint: {
         latitude: routeInfo.firstRoute.nearestPoint.lat,
         longitude: routeInfo.firstRoute.nearestPoint.lng,
@@ -558,6 +594,66 @@ export default function Navigation() {
         longitude: routeInfo.secondRoute.nearestPoint.lng,
       },
     }
+  }
+
+  // Handle transport mode change
+  const handleModeChange = (mode) => {
+    setTravelMode(mode)
+
+    if (mode === "book-ride") {
+      handleBookRide()
+      return
+    }
+
+    if (mode === "jeepney" && userLocation && selectedLocation) {
+      getJeepneyRecommendations()
+    } else if (mode === "walking") {
+      // Show appropriate walking route
+      const walkingRoute = showSafestRoute ? safestWalkingRoute : fastestWalkingRoute
+      if (walkingRoute.length > 0) {
+        setRoutePath(walkingRoute)
+        fitMapToRoute(walkingRoute)
+      }
+    } else if (userLocation && selectedLocation) {
+      fetchDirections()
+    }
+  }
+
+  // Toggle between fastest and safest walking routes
+  const toggleWalkingRoute = () => {
+    setShowSafestRoute(!showSafestRoute)
+    const newRoute = !showSafestRoute ? safestWalkingRoute : fastestWalkingRoute
+    if (newRoute.length > 0 && travelMode === "walking") {
+      setRoutePath(newRoute)
+      fitMapToRoute(newRoute)
+    }
+  }
+
+  // Handle book ride
+  const handleBookRide = () => {
+    if (!selectedLocation) {
+      Alert.alert("Select Destination", "Please select a destination first")
+      return
+    }
+
+    const grabUrl = `grab://open?dropoff=${selectedLocation.latitude},${selectedLocation.longitude}&dropoffName=${encodeURIComponent(toLocation)}`
+
+    Linking.canOpenURL(grabUrl)
+      .then((supported) => {
+        if (supported) {
+          return Linking.openURL(grabUrl)
+        } else {
+          const storeUrl = Platform.select({
+            ios: "https://apps.apple.com/app/grab-app/id647268330",
+            android: "market://details?id=com.grabtaxi.passenger",
+          })
+          return Linking.openURL(storeUrl)
+        }
+      })
+      .catch((err) => {
+        console.error("Error opening Grab app:", err)
+        Alert.alert("Error", "Unable to open Grab app. Please make sure it's installed.")
+      })
   }
 
   // Calculate distance between two points
@@ -639,6 +735,7 @@ export default function Navigation() {
     setEta({})
     setJeepneyRoute(null)
     setJeepneyRecommendations([])
+    setSelectedJeepneyRoute(null)
     setTravelMode("driving")
 
     if (userLocation && mapRef.current) {
@@ -652,14 +749,22 @@ export default function Navigation() {
   }
 
   // Get route color for jeepney routes
-  const getRouteColor = (routeName) => {
-    if (routeName.includes("Banago")) return "#2E8B57"
-    if (routeName.includes("Northbound")) return "#3CB371"
-    if (routeName.includes("Tangub")) return "#20B2AA"
-    if (routeName.includes("Airport")) return "#32CD32"
-    if (routeName.includes("Mandalagan")) return "#66CDAA"
-    if (routeName.includes("Bata")) return "#98FB98"
-    return "#2E8B57"
+  const getRouteColor = (routeId) => {
+    const colors = {
+      "1": "#2E8B57", // Banago - Libertad
+      "2": "#3CB371", // Northbound Terminal - Libertad
+      "3": "#20B2AA", // Tangub - Libertad
+      "4": "#32CD32", // Airport - Libertad
+      "5": "#66CDAA", // Mandalagan - Libertad
+      "6": "#98FB98", // Bata - Libertad
+    }
+
+    return colors[routeId] || "#2E8B57"
+  }
+
+  // Toggle all routes view
+  const toggleAllRoutes = () => {
+    setShowAllRoutes(!showAllRoutes)
   }
 
   // Render jeepney routes modal
@@ -675,18 +780,18 @@ export default function Navigation() {
           <View style={styles.modalHeader}>
             <View style={styles.modalTitleContainer}>
               <View style={[styles.iconContainer, { backgroundColor: "#2E8B57" }]}>
-                <Ionicons name="bus" size={28} color="white" />
+                <Ionicons name="bus" size={24} color="white" />
               </View>
               <Text style={styles.modalTitle}>Jeepney Routes</Text>
             </View>
             <TouchableOpacity onPress={() => setShowJeepneyRoutesModal(false)} style={styles.closeButton}>
-              <Ionicons name="close-circle" size={28} color="#2E8B57" />
+              <Ionicons name="close-circle" size={24} color="#2E8B57" />
             </TouchableOpacity>
           </View>
 
           <ScrollView style={styles.routesList} showsVerticalScrollIndicator={false}>
             {Object.entries(JEEPNEY_ROUTES_DETAILED).map(([id, route]) => {
-              const routeColor = getRouteColor(route.name)
+              const routeColor = getRouteColor(id)
               return (
                 <TouchableOpacity
                   key={id}
@@ -695,10 +800,15 @@ export default function Navigation() {
                 >
                   <View style={styles.routeCardContent}>
                     <View style={[styles.routeIconContainer, { backgroundColor: `${routeColor}20` }]}>
-                      <Ionicons name="bus" size={24} color={routeColor} />
+                      <Ionicons name="bus" size={20} color={routeColor} />
                     </View>
                     <View style={styles.routeInfo}>
                       <Text style={styles.routeName}>{route.name}</Text>
+                      {route.paths.map((path, index) => (
+                        <Text key={index} style={styles.routePath}>
+                          {path.from} → {path.to}
+                        </Text>
+                      ))}
                     </View>
                   </View>
                 </TouchableOpacity>
@@ -709,32 +819,6 @@ export default function Navigation() {
       </View>
     </Modal>
   )
-
-  // Handle mode change
-  const handleModeChange = (mode) => {
-    setTravelMode(mode)
-    if (mode === "jeepney" && userLocation && selectedLocation) {
-      getJeepneyRecommendations()
-    } else {
-      setJeepneyRoute(null)
-      setJeepneyRecommendations([])
-      if (userLocation && selectedLocation) {
-        fetchDirections()
-      }
-    }
-  }
-
-  // Toggle walking route
-  const toggleWalkingRoute = () => {
-    setShowSafestRoute(!showSafestRoute)
-  }
-
-  // Find transfer point
-  const findTransferPoint = (userRoute, destRoute) => {
-    // Placeholder implementation for finding transfer point
-    // This should be replaced with actual logic to find the nearest transfer point
-    return { latitude: 0, longitude: 0 }
-  }
 
   return (
     <SafeAreaView style={styles.container}>
@@ -772,6 +856,28 @@ export default function Navigation() {
             </Marker>
           )}
 
+          {/* Show all routes in the background if enabled */}
+          {showAllRoutes &&
+            Object.entries(JEEPNEY_ROUTES_DETAILED).map(([routeId, routeDetails]) =>
+              routeDetails.paths.map((path, pathIndex) => {
+                const routePath = path.via.map((point) => ({
+                  latitude: point.lat,
+                  longitude: point.lng,
+                }))
+
+                return (
+                  <Polyline
+                    key={`${routeId}-${pathIndex}`}
+                    coordinates={routePath}
+                    strokeWidth={2}
+                    strokeColor={`${getRouteColor(routeId)}80`} // Semi-transparent
+                    lineCap="round"
+                    lineJoin="round"
+                  />
+                )
+              }),
+            )}
+
           {/* Route polylines */}
           {routePath.length > 0 && travelMode !== "jeepney" && (
             <Polyline
@@ -783,14 +889,14 @@ export default function Navigation() {
             />
           )}
 
-          {/* Jeepney route polylines */}
+          {/* Selected jeepney route */}
           {travelMode === "jeepney" && jeepneyRoute && (
             <>
               {jeepneyRoute.type === "direct" && jeepneyRoute.routePath && (
                 <Polyline
                   coordinates={jeepneyRoute.routePath}
                   strokeWidth={6}
-                  strokeColor="#FFC107"
+                  strokeColor={getRouteColor(selectedJeepneyRoute.routeId)}
                   lineCap="round"
                   lineJoin="round"
                 />
@@ -801,7 +907,7 @@ export default function Navigation() {
                     <Polyline
                       coordinates={jeepneyRoute.firstRoutePath}
                       strokeWidth={6}
-                      strokeColor="#FFC107"
+                      strokeColor={getRouteColor(selectedJeepneyRoute.firstRoute.routeId)}
                       lineCap="round"
                       lineJoin="round"
                     />
@@ -810,19 +916,35 @@ export default function Navigation() {
                     <Polyline
                       coordinates={jeepneyRoute.secondRoutePath}
                       strokeWidth={6}
-                      strokeColor="#FF9800"
+                      strokeColor={getRouteColor(selectedJeepneyRoute.secondRoute.routeId)}
                       lineCap="round"
                       lineJoin="round"
                     />
                   )}
                   {jeepneyRoute.transferPoint && (
                     <Marker coordinate={jeepneyRoute.transferPoint} title="Transfer Point">
-                      <View style={[styles.jeepneyAccessMarker, { backgroundColor: "#FF5722" }]}>
+                      <View style={[styles.transferMarker]}>
                         <Ionicons name="swap-horizontal" size={12} color="#fff" />
                       </View>
                     </Marker>
                   )}
                 </>
+              )}
+
+              {/* Jeepney access points */}
+              {jeepneyRoute.userAccessPoint && (
+                <Marker coordinate={jeepneyRoute.userAccessPoint} title="Board Jeepney">
+                  <View style={styles.jeepneyAccessMarker}>
+                    <Ionicons name="log-in" size={12} color="#fff" />
+                  </View>
+                </Marker>
+              )}
+              {jeepneyRoute.destinationAccessPoint && (
+                <Marker coordinate={jeepneyRoute.destinationAccessPoint} title="Exit Jeepney">
+                  <View style={[styles.jeepneyAccessMarker, { backgroundColor: "#FF3B30" }]}>
+                    <Ionicons name="log-out" size={12} color="#fff" />
+                  </View>
+                </Marker>
               )}
             </>
           )}
@@ -848,27 +970,21 @@ export default function Navigation() {
               />
             </>
           )}
-
-          {/* Jeepney access points */}
-          {travelMode === "jeepney" && jeepneyRoute && (
-            <>
-              {jeepneyRoute.userAccessPoint && (
-                <Marker coordinate={jeepneyRoute.userAccessPoint} title="Jeepney Stop">
-                  <View style={styles.jeepneyAccessMarker}>
-                    <Ionicons name="bus" size={12} color="#fff" />
-                  </View>
-                </Marker>
-              )}
-              {jeepneyRoute.destinationAccessPoint && (
-                <Marker coordinate={jeepneyRoute.destinationAccessPoint} title="Destination Stop">
-                  <View style={styles.jeepneyAccessMarker}>
-                    <Ionicons name="bus" size={12} color="#fff" />
-                  </View>
-                </Marker>
-              )}
-            </>
-          )}
         </MapView>
+
+        {/* Map controls */}
+        <View style={styles.mapControls}>
+          <TouchableOpacity
+            style={[styles.mapControlButton, showAllRoutes && styles.mapControlButtonActive]}
+            onPress={toggleAllRoutes}
+          >
+            <Ionicons name="git-network" size={20} color={showAllRoutes ? "#fff" : "#333"} />
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.mapControlButton} onPress={() => setShowJeepneyRoutesModal(true)}>
+            <Ionicons name="bus" size={20} color="#333" />
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Main content */}
@@ -877,7 +993,7 @@ export default function Navigation() {
         <View style={styles.searchBarContainer}>
           <View style={styles.locationFields}>
             <View style={styles.locationField}>
-              <Ionicons name="location" size={18} color="#007bff" />
+              <Ionicons name="location" size={18} color="#2E8B57" />
               <Text style={styles.locationText}>{fromLocation}</Text>
             </View>
             <View style={styles.locationField}>
@@ -895,7 +1011,7 @@ export default function Navigation() {
               )}
             </View>
           </View>
-          {loading && <ActivityIndicator size="small" color="#007bff" style={styles.loading} />}
+          {loading && <ActivityIndicator size="small" color="#2E8B57" style={styles.loading} />}
         </View>
 
         {/* Search Results */}
@@ -989,11 +1105,22 @@ export default function Navigation() {
             <View style={styles.recommendationsSection}>
               <Text style={styles.sectionTitle}>Jeepney Recommendations</Text>
               {jeepneyRecommendations.map((recommendation, index) => (
-                <View key={index} style={styles.recommendationCard}>
+                <TouchableOpacity
+                  key={index}
+                  style={[
+                    styles.recommendationCard,
+                    selectedJeepneyRoute === recommendation && styles.selectedRecommendationCard,
+                  ]}
+                  onPress={() => selectJeepneyRoute(recommendation)}
+                >
                   <View style={styles.recommendationHeader}>
                     <Ionicons name="bus" size={20} color="#FFC107" />
                     <Text style={styles.recommendationTitle}>
-                      {JEEPNEY_ROUTES_DETAILED[recommendation.routeId]?.name || "Unknown Route"}
+                      {recommendation.type === "direct"
+                        ? JEEPNEY_ROUTES_DETAILED[recommendation.routeId]?.name
+                        : JEEPNEY_ROUTES_DETAILED[recommendation.firstRoute.routeId]?.name +
+                          " → " +
+                          JEEPNEY_ROUTES_DETAILED[recommendation.secondRoute.routeId]?.name}
                     </Text>
                     <View
                       style={[
@@ -1015,7 +1142,7 @@ export default function Navigation() {
                       {JEEPNEY_ROUTES_DETAILED[recommendation.secondRoute?.routeId]?.name || "Unknown Route"}
                     </Text>
                   )}
-                </View>
+                </TouchableOpacity>
               ))}
             </View>
           )}
@@ -1052,11 +1179,6 @@ export default function Navigation() {
         </ScrollView>
       </View>
 
-      {/* Floating jeepney routes button */}
-      <TouchableOpacity style={styles.showRoutesButton} onPress={() => setShowJeepneyRoutesModal(true)}>
-        <Ionicons name="bus" size={20} color="white" />
-      </TouchableOpacity>
-
       {renderJeepneyRoutesModal()}
     </SafeAreaView>
   )
@@ -1074,6 +1196,29 @@ const styles = StyleSheet.create({
   },
   map: {
     ...StyleSheet.absoluteFillObject,
+  },
+  mapControls: {
+    position: "absolute",
+    top: 16,
+    right: 16,
+    flexDirection: "column",
+    gap: 8,
+  },
+  mapControlButton: {
+    backgroundColor: "#fff",
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: "center",
+    alignItems: "center",
+    elevation: 4,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 2,
+  },
+  mapControlButtonActive: {
+    backgroundColor: "#2E8B57",
   },
   contentContainer: {
     flex: 1,
@@ -1274,6 +1419,12 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 8,
     elevation: 5,
+    borderWidth: 1,
+    borderColor: "#f0f0f0",
+  },
+  selectedRecommendationCard: {
+    borderColor: "#2E8B57",
+    borderWidth: 2,
   },
   recommendationHeader: {
     flexDirection: "row",
@@ -1402,28 +1553,21 @@ const styles = StyleSheet.create({
     width: 24,
     height: 24,
     borderRadius: 12,
-    backgroundColor: "#FFC107",
+    backgroundColor: "#4CAF50",
     justifyContent: "center",
     alignItems: "center",
     borderWidth: 2,
     borderColor: "#fff",
   },
-  showRoutesButton: {
-    position: "absolute",
-    top: 16,
-    right: 16,
-    backgroundColor: "#40B59F",
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+  transferMarker: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: "#FF9800",
     justifyContent: "center",
     alignItems: "center",
-    elevation: 4,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 2,
-    zIndex: 1000,
+    borderWidth: 2,
+    borderColor: "#fff",
   },
   modalOverlay: {
     flex: 1,
@@ -1499,5 +1643,10 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: "#333",
     fontWeight: "600",
+    marginBottom: 4,
+  },
+  routePath: {
+    fontSize: 12,
+    color: "#666",
   },
 })
