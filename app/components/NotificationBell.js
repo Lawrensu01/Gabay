@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { collection, query, where, onSnapshot, orderBy } from 'firebase/firestore';
 import { db } from '../../firebaseConfig';
@@ -8,18 +8,44 @@ export default function NotificationBell({ navigation }) {
   const [unreadCount, setUnreadCount] = useState(0);
 
   useEffect(() => {
-    // Listen for new notifications
-    const notificationsRef = collection(db, 'notifications');
-    const q = query(
-      notificationsRef,
-      where('status', '==', 'unread'),
-      orderBy('timestamp', 'desc')
-    );
+    let retryCount = 0;
+    const maxRetries = 3;
+    const retryDelay = 2000; // 2 seconds
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      setUnreadCount(snapshot.docs.length);
-    });
+    const setupNotificationListener = () => {
+      // Listen for new notifications
+      const notificationsRef = collection(db, 'notifications');
+      const q = query(
+        notificationsRef,
+        where('status', '==', 'unread'),
+        orderBy('timestamp', 'desc')
+      );
 
+      const unsubscribe = onSnapshot(q, 
+        (snapshot) => {
+          // Reset retry count on successful connection
+          retryCount = 0;
+          setUnreadCount(snapshot.docs.length);
+        },
+        (error) => {
+          console.error('Notification listener error:', error);
+          
+          // Attempt to reconnect if we haven't exceeded max retries
+          if (retryCount < maxRetries) {
+            retryCount++;
+            console.log(`Attempting to reconnect notification listener (${retryCount}/${maxRetries})...`);
+            setTimeout(setupNotificationListener, retryDelay);
+          } else {
+            console.error('Max retry attempts reached for notification listener.');
+            // Don't show alert for notification bell to avoid disrupting user experience
+          }
+        }
+      );
+
+      return unsubscribe;
+    };
+
+    const unsubscribe = setupNotificationListener();
     return () => unsubscribe();
   }, []);
 

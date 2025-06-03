@@ -79,12 +79,13 @@ export default function Profile() {
                 mediaTypes: ImagePicker.MediaTypeOptions.Images,
                 allowsEditing: true,
                 aspect: [1, 1],
-                quality: 0.7,
+                quality: 0.5,
                 base64: true,
             });
 
             if (!result.canceled) {
-                setProfileImage(result.assets[0].uri);
+                const base64Image = `data:image/jpeg;base64,${result.assets[0].base64}`;
+                setProfileImage(base64Image);
             }
         } catch (error) {
             Alert.alert("Error", "Failed to pick image");
@@ -96,12 +97,13 @@ export default function Profile() {
             const result = await ImagePicker.launchCameraAsync({
                 allowsEditing: true,
                 aspect: [1, 1],
-                quality: 0.7,
+                quality: 0.5,
                 base64: true,
             });
 
             if (!result.canceled) {
-                setProfileImage(result.assets[0].uri);
+                const base64Image = `data:image/jpeg;base64,${result.assets[0].base64}`;
+                setProfileImage(base64Image);
             }
         } catch (error) {
             Alert.alert("Error", "Failed to take picture");
@@ -129,6 +131,7 @@ export default function Profile() {
 
             Alert.alert("Success", "Profile updated successfully!");
         } catch (error) {
+            console.error('Error updating profile:', error);
             Alert.alert("Error", "Failed to update profile.");
         }
 
@@ -174,7 +177,11 @@ export default function Profile() {
     }
 
     return (
-        <View style={styles.container}>
+        <ScrollView 
+            style={styles.container}
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={{ paddingBottom: 40 }}
+        >
             <Text style={styles.headerText}>Edit Profile</Text>
 
             {/* Profile Image Section - Made more compact */}
@@ -230,7 +237,7 @@ export default function Profile() {
                     <Text style={styles.logoutButtonText}>Logout</Text>
                 </TouchableOpacity>
             </View>
-        </View>
+        </ScrollView>
     );
 }
 
@@ -256,115 +263,131 @@ const ProfileField = ({ label, value, setValue, keyboardType = "default" }) => {
 const styles = {
     container: {
         flex: 1,
-        backgroundColor: '#f5f5f5',
-        paddingTop: 40,
-        paddingHorizontal: 20,
-        justifyContent: 'space-between', // This helps distribute space
+        backgroundColor: '#F8F9FA',
+        paddingTop: 50,
+        paddingHorizontal: 24,
     },
     headerText: {
-        fontSize: 20,
-        fontWeight: 'bold',
-        color: '#2C3E50',
+        fontSize: 24,
+        fontWeight: '700',
+        color: '#1A1A1A',
         textAlign: 'center',
-        marginBottom: 10,
+        marginBottom: 24,
     },
     imageContainer: {
         alignItems: 'center',
-        marginBottom: 10,
+        marginBottom: 32,
     },
     imageWrapper: {
         alignItems: 'center',
+        position: 'relative',
     },
     profileImage: {
-        width: 100, // Smaller size
-        height: 100, // Smaller size
-        borderRadius: 50,
-        borderWidth: 2,
+        width: 120,
+        height: 120,
+        borderRadius: 60,
+        borderWidth: 3,
         borderColor: '#40B59F',
+        backgroundColor: '#E8E8E8',
     },
     imageButtonsContainer: {
         flexDirection: 'row',
         justifyContent: 'center',
-        marginTop: 5,
-        gap: 10,
+        marginTop: 16,
+        gap: 12,
     },
     imageButton: {
         backgroundColor: '#40B59F',
-        padding: 6,
-        borderRadius: 15,
+        padding: 8,
+        borderRadius: 20,
         flexDirection: 'row',
         alignItems: 'center',
-        paddingHorizontal: 12,
-        gap: 4,
+        paddingHorizontal: 16,
+        gap: 6,
+        shadowColor: '#40B59F',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.2,
+        shadowRadius: 4,
+        elevation: 3,
     },
     buttonText: {
         color: 'white',
-        fontSize: 11,
+        fontSize: 13,
         fontWeight: '600',
     },
     formContainer: {
         backgroundColor: 'white',
-        padding: 12,
-        borderRadius: 15,
+        padding: 20,
+        borderRadius: 20,
         shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.1,
-        shadowRadius: 4,
-        elevation: 3,
-        marginBottom: 10,
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.08,
+        shadowRadius: 8,
+        elevation: 4,
+        marginBottom: 24,
     },
     fieldContainer: {
-        marginBottom: 8,
+        marginBottom: 16,
     },
     fieldLabel: {
-        fontSize: 11,
-        color: '#666',
-        marginBottom: 2,
+        fontSize: 13,
+        color: '#4A4A4A',
+        marginBottom: 6,
         fontWeight: '600',
     },
     input: {
         borderWidth: 1,
-        borderColor: '#ddd',
-        borderRadius: 8,
-        padding: 6,
-        fontSize: 13,
-        color: "#333",
-        backgroundColor: '#f9f9f9',
-        height: 32,
+        borderColor: '#E0E0E0',
+        borderRadius: 12,
+        padding: 12,
+        fontSize: 15,
+        color: "#1A1A1A",
+        backgroundColor: '#FAFAFA',
+        height: 48,
     },
     buttonContainer: {
-        gap: 8,
-        marginBottom: 80, // Space for bottom tab bar
+        gap: 12,
+        marginBottom: 32,
     },
     saveButton: {
         backgroundColor: '#40B59F',
-        padding: 10,
-        borderRadius: 10,
+        padding: 16,
+        borderRadius: 16,
         flexDirection: 'row',
         justifyContent: 'center',
         alignItems: 'center',
-        gap: 8,
+        gap: 10,
+        shadowColor: '#40B59F',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.2,
+        shadowRadius: 8,
+        elevation: 4,
     },
     disabledButton: {
         opacity: 0.7,
     },
     saveButtonText: {
         color: 'white',
-        fontSize: 14,
+        fontSize: 16,
         fontWeight: '600',
     },
     logoutButton: {
-        backgroundColor: '#e74c3c',
-        padding: 10,
-        borderRadius: 10,
+        backgroundColor: '#FF4B4B',
+        padding: 16,
+        borderRadius: 16,
         flexDirection: 'row',
         justifyContent: 'center',
         alignItems: 'center',
-        gap: 8,
+        gap: 10,
+        shadowColor: '#FF4B4B',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.2,
+        shadowRadius: 8,
+        elevation: 4,
     },
     logoutButtonText: {
         color: 'white',
-        fontSize: 14,
+        fontSize: 16,
         fontWeight: '600',
     },
 };

@@ -1,18 +1,73 @@
 {
   "cli": {
-    "version": ">= 16.3.1",
+    "version": ">= 7.0.0",
     "appVersionSource": "remote"
   },
   "build": {
     "development": {
       "developmentClient": true,
-      "distribution": "internal"
+      "distribution": "internal",
+      "channel": "development",
+      "ios": {
+        "resourceClass": "m-medium"
+      }
     },
     "preview": {
-      "distribution": "internal"
+      "distribution": "internal",
+      "channel": "preview",
+      "ios": {
+        "resourceClass": "m-medium"
+      },
+      "android": {
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleRelease",
+        "image": "auto",
+        "env": {
+          "ANDROID_NDK_HOME": "{{ANDROID_NDK_HOME}}",
+          "GEMINI_DEBUG": "true"
+        }
+      },
+      "env": {
+        "APP_ENV": "preview",
+        "EXTRA_MEMORY_ANDROID": "true",
+        "GEMINI_TIMEOUT_MS": "60000",
+        "IMAGE_QUALITY": "low"
+      },
+      "cache": {
+        "key": "preview-v3"
+      }
+    },
+    "gemini-test": {
+      "distribution": "internal",
+      "channel": "testing",
+      "android": {
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleRelease",
+        "image": "auto",
+        "env": {
+          "ANDROID_NDK_HOME": "{{ANDROID_NDK_HOME}}",
+          "GEMINI_DEBUG": "true"
+        }
+      },
+      "env": {
+        "APP_ENV": "testing",
+        "EXTRA_MEMORY_ANDROID": "true",
+        "GEMINI_TIMEOUT_MS": "60000",
+        "IMAGE_QUALITY": "low"
+      },
+      "cache": {
+        "key": "gemini-test-v2"
+      }
     },
     "production": {
-      "autoIncrement": true
+      "autoIncrement": true,
+      "channel": "production",
+      "ios": {
+        "resourceClass": "m-medium"
+      },
+      "android": {
+        "image": "auto"
+      }
     }
   },
   "submit": {

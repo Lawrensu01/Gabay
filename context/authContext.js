@@ -8,6 +8,7 @@ import {
 import { auth, db } from "../firebaseConfig";
 import { doc, setDoc, getDoc } from 'firebase/firestore';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { checkPermissions } from "../utils/permissionsHandler";
 
 export const AuthContext = createContext();
 
@@ -15,6 +16,7 @@ export const AuthContextProvider = ({ children }) => {
     const [user, setUser] = useState(null);
     const [isAdmin, setIsAdmin] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
+    const [permissionsGranted, setPermissionsGranted] = useState(false);
 
     // Initialize auth state from AsyncStorage
     useEffect(() => {
@@ -76,9 +78,23 @@ export const AuthContextProvider = ({ children }) => {
         return unsubscribe;
     }, []);
 
+    const checkPermissionsStatus = async () => {
+        try {
+            const permissions = await checkPermissions();
+            const allGranted = Object.values(permissions).every(Boolean);
+            setPermissionsGranted(allGranted);
+            return allGranted;
+        } catch (error) {
+            console.error('Error checking permissions:', error);
+            return false;
+        }
+    };
+
     const login = async (email, password) => {
         try {
             const response = await signInWithEmailAndPassword(auth, email, password);
+            // Check permissions after successful login
+            await checkPermissionsStatus();
             return { success: true };
         } catch (e) {
             let msg = e.message;
@@ -127,7 +143,9 @@ export const AuthContextProvider = ({ children }) => {
             register, 
             logout,
             isAuthenticated: !!user,
-            isLoading 
+            isLoading,
+            checkPermissionsStatus,
+            permissionsGranted
         }}>
             {children}
         </AuthContext.Provider>

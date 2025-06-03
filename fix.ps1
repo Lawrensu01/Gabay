@@ -1,0 +1,1 @@
+$file = "app/(app)/navigation.js"; $content = Get-Content -Path $file -Raw; $fixedContent = $content -replace "  },\r?\n// Function", "  }\r\n};\r\n\r\n// Function"; Set-Content -Path "$file.fixed" -Value $fixedContent

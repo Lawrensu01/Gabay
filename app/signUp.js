@@ -1,5 +1,5 @@
 import { View, TextInput, Image, Text, TouchableOpacity, Pressable, Alert, StyleSheet } from 'react-native';
-import React, { useRef } from 'react';
+import React, { useRef, useState } from 'react';
 import { widthPercentageToDP as wp, heightPercentageToDP as hp } from 'react-native-responsive-screen';
 import { StatusBar } from 'expo-status-bar';
 import AntDesign from '@expo/vector-icons/AntDesign';
@@ -75,15 +75,24 @@ export default function SignUp() {
     const { register } = useAuth();
     const mailref = useRef("");
     const passwordref = useRef("");
+    const retypePasswordref = useRef("");
     const fnameref = useRef("");
     const lnameref = useRef("");
     const mnameref = useRef("");
+    const [showPassword, setShowPassword] = useState(false);
+    const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
     const handleRegister = async () => {
-        if (!fnameref.current || !lnameref.current || !mnameref.current || !mailref.current || !passwordref.current) {
-            Alert.alert('Sign Up', "Please fill all fields");
+        if (!fnameref.current || !lnameref.current || !mailref.current || !passwordref.current || !retypePasswordref.current) {
+            Alert.alert('Sign Up', "Please fill all required fields");
             return;
         }
+
+        if (passwordref.current !== retypePasswordref.current) {
+            Alert.alert('Sign Up', "Passwords do not match");
+            return;
+        }
+
         const response = await register(mailref.current, passwordref.current, fnameref.current, lnameref.current, mnameref.current);
 
         if (!response.success) {
@@ -128,7 +137,7 @@ export default function SignUp() {
                     <TextInput
                         onChangeText={value => mnameref.current = value}
                         style={styles.input}
-                        placeholder="Middle Name"
+                        placeholder="Middle Name (Optional)"
                         placeholderTextColor="gray"
                     />
                 </View>
@@ -153,9 +162,35 @@ export default function SignUp() {
                         onChangeText={value => passwordref.current = value}
                         style={styles.input}
                         placeholder="Password"
-                        secureTextEntry
+                        secureTextEntry={!showPassword}
                         placeholderTextColor="gray"
                     />
+                    <TouchableOpacity onPress={() => setShowPassword(!showPassword)}>
+                        <AntDesign 
+                            name={showPassword ? "eye" : "eyeo"} 
+                            size={hp(2.7)} 
+                            color="black" 
+                        />
+                    </TouchableOpacity>
+                </View>
+
+                {/* Confirm Password Input */}
+                <View style={styles.inputWrapper}>
+                    <AntDesign name="lock" size={hp(2.7)} color="black" />
+                    <TextInput
+                        onChangeText={value => retypePasswordref.current = value}
+                        style={styles.input}
+                        placeholder="Confirm Password"
+                        secureTextEntry={!showConfirmPassword}
+                        placeholderTextColor="gray"
+                    />
+                    <TouchableOpacity onPress={() => setShowConfirmPassword(!showConfirmPassword)}>
+                        <AntDesign 
+                            name={showConfirmPassword ? "eye" : "eyeo"} 
+                            size={hp(2.7)} 
+                            color="black" 
+                        />
+                    </TouchableOpacity>
                 </View>
             </View>
 
