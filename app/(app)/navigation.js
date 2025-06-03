@@ -24,7 +24,7 @@ import { useNavigation, useRoute } from "@react-navigation/native"
 import { useAuth } from "../../context/authContext"
 import { JEEPNEY_ROUTES_DETAILED } from "./jeepney_routes"
 
-const API_KEY = "AlzaSyuXryjNYbGxqXXsY8cgTEnntUZn7XnnLA"
+const API_KEY = "AlzaSyuXryjNYbGxgqXXsY8cgTEnntUZn7XnnLA"
 
 // Smart jeepney route recommendation system
 class SmartJeepneyOptimizer {
